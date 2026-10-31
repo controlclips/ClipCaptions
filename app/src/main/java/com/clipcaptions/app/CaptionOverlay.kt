@@ -22,11 +22,15 @@ import android.widget.TextView
  * The floating caption box drawn over other apps. Drag it up or down; tap ✕ to stop.
  * Each line shows its translation when there is one, "…" while a translation is on its way,
  * or the words as heard. All methods must be called on the main thread.
+ *
+ * [onScreenTouched] is called when you touch the screen anywhere outside the box (Android only
+ * says that a touch happened, not where), which helps spot swipes to the next video.
  */
 class CaptionOverlay(
     private val context: Context,
     initialLabel: String,
     private val onClose: () -> Unit,
+    private val onScreenTouched: () -> Unit,
 ) {
 
     private class Line(val id: Int, val original: String, val awaiting: Boolean, var translated: String?)
@@ -40,6 +44,9 @@ class CaptionOverlay(
     private var liveTranslated: String? = null
     private var status: String? = null
     private var hintToken = 0
+
+    // After a swipe to another video the box shrinks to its header until new words arrive.
+    private var cleared = false
 
     private lateinit var root: FrameLayout
     private lateinit var labelView: TextView
@@ -130,7 +137,9 @@ class CaptionOverlay(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -142,6 +151,7 @@ class CaptionOverlay(
         var downY = 0
         root.setOnTouchListener { _, event ->
             when (event.actionMasked) {
+                MotionEvent.ACTION_OUTSIDE -> onScreenTouched()
                 MotionEvent.ACTION_DOWN -> {
                     downRawY = event.rawY
                     downY = params.y
@@ -175,9 +185,21 @@ class CaptionOverlay(
         if (shown) labelView.text = text
     }
 
+    /** Removes all captions, for when you move on to another video. */
+    fun clearCaptions() {
+        lines.clear()
+        liveOriginal = ""
+        liveAwaiting = false
+        liveTranslated = null
+        status = null
+        cleared = true
+        render()
+    }
+
     /** Placeholder shown before any words arrive, such as "Loading the speech model…". */
     fun setStatus(text: String?) {
         status = text
+        if (text != null) cleared = false
         render()
     }
 
@@ -213,6 +235,7 @@ class CaptionOverlay(
         } else {
             liveOriginal = original
             liveAwaiting = awaitingTranslation
+            cleared = false
         }
         render()
     }
@@ -232,6 +255,7 @@ class CaptionOverlay(
         liveAwaiting = false
         liveTranslated = null
         status = null
+        cleared = false
         render()
         return line.id
     }
@@ -259,8 +283,9 @@ class CaptionOverlay(
             text.appendColored(liveText, dimWhite)
         }
 
-        if (text.isEmpty()) text.appendColored(status ?: "Listening…", dimWhite)
+        if (text.isEmpty() && !cleared) text.appendColored(status ?: "Listening…", dimWhite)
         mainText.text = text
+        mainText.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
 
         // Under a translation, show the words as heard in small print.
         val source: String
