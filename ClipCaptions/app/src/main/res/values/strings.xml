@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Clip Captions</string>
+    <string name="intro">Shows what people say in videos as text, translated, in a floating box over TikTok or any other app. It reads the phone\'s own sound, so it works with AirPods and other headphones.</string>
+    <string name="label_source">Language spoken in the videos</string>
+    <string name="label_target">Show the words in</string>
+    <string name="start_captions">Start captions</string>
+    <string name="how_title">How to use it</string>
+    <string name="how_steps">1. Pick the language people speak in the videos, and the language you want to read.\n2. Tap Start captions. The first time, allow “Display over other apps” and the sound permission, then wait for the language download (30–90 MB, Wi-Fi recommended).\n3. When Android asks to share your screen, tap Start. Only the sound is used, and nothing is saved.\n4. TikTok opens. Play a video and the words appear in the floating box. Drag it up or down, or tap ✕ to stop.</string>
+    <string name="accuracy_note">Speech recognition and translation run on your phone. Clear speech works best; loud music under the voice lowers accuracy.</string>
+</resources>
