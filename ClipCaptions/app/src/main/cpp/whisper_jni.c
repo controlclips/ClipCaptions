@@ -44,19 +44,32 @@ Java_com_clipcaptions_app_WhisperLib_nativeFree(JNIEnv *env, jclass clazz, jlong
 }
 
 // Transcribes (or translates into English) one chunk of 16 kHz mono audio.
+// language: a code such as "es" once the video's language is known, or "auto" to detect it.
 // Returns the text as UTF-8 bytes (empty when no speech was found), or null on failure.
 JNIEXPORT jbyteArray JNICALL
 Java_com_clipcaptions_app_WhisperLib_nativeTranscribe(
         JNIEnv *env, jclass clazz, jlong handle, jfloatArray samples,
-        jint threads, jboolean translate) {
+        jint threads, jboolean translate, jstring language) {
     (void) clazz;
     struct whisper_context *ctx = as_context(handle);
     if (ctx == NULL || samples == NULL) return NULL;
 
+    // Copied so the Java string can be released straight away.
+    char lang[16] = "auto";
+    if (language != NULL) {
+        const char *chosen = (*env)->GetStringUTFChars(env, language, NULL);
+        if (chosen != NULL) {
+            if (chosen[0] != '\0' && strlen(chosen) < sizeof(lang) && whisper_lang_id(chosen) >= 0) {
+                strcpy(lang, chosen);
+            }
+            (*env)->ReleaseStringUTFChars(env, language, chosen);
+        }
+    }
+
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.n_threads = threads > 0 ? threads : 2;
     params.translate = translate == JNI_TRUE;
-    params.language = "auto";
+    params.language = lang;
     params.detect_language = false;
     params.no_context = true;
     params.no_timestamps = true;

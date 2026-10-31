@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "ClipCaptions"
 include(":app")
+include(":whisperfast")
