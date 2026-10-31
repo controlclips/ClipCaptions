@@ -37,10 +37,12 @@ class MainActivity : AppCompatActivity() {
     private data class Launch(
         val auto: Boolean,
         val voskModel: String? = null,
-        val whisperModel: String? = null,
-        val whisperFallback: String? = null,
+        val whisperModels: List<String> = emptyList(),
         val vadModel: String? = null,
-    )
+        val automaticSpeed: Boolean = true,
+    ) {
+        fun whisperRequest() = WhisperEngine.Request(whisperModels, vadModel, automaticSpeed)
+    }
 
     private lateinit var modeGroup: RadioGroup
     private lateinit var modeAuto: RadioButton
@@ -73,6 +75,7 @@ class MainActivity : AppCompatActivity() {
         val data = result.data
         val launch = pendingLaunch
         if (result.resultCode != Activity.RESULT_OK || data == null || launch == null) {
+            if (launch?.auto == true) WhisperEngine.discardPreload()
             fail("Captions didn't start because the sharing request was cancelled. Tap Start captions to try again.")
             return@registerForActivityResult
         }
@@ -130,6 +133,9 @@ class MainActivity : AppCompatActivity() {
         showModeSections()
 
         val save = {
+            // A new accuracy choice means Automatic should time the models again.
+            val previousSpeed = prefs.getString("speed", null)
+            if (previousSpeed != null && previousSpeed != selectedSpeed().key) WhisperEngine.forgetSpeedTests(this)
             prefs.edit()
                 .putString("mode", if (isAutoMode()) CaptionService.MODE_AUTO else CaptionService.MODE_LIVE)
                 .putString("source", selectedSpoken().code)
@@ -194,8 +200,8 @@ class MainActivity : AppCompatActivity() {
         setStatus("Getting automatic detection ready…")
         io.execute {
             try {
-                val total = plan.files.size
-                plan.files.forEachIndexed { index, item ->
+                val total = plan.downloads.size
+                plan.downloads.forEachIndexed { index, item ->
                     if (!WhisperModels.isDownloaded(this, item)) {
                         WhisperModels.ensure(this, item) { percent ->
                             runOnUiThread {
@@ -208,10 +214,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 val launch = Launch(
                     auto = true,
-                    whisperModel = WhisperModels.file(this, plan.start).absolutePath,
-                    whisperFallback = plan.fallback?.let { WhisperModels.file(this, it).absolutePath },
+                    whisperModels = plan.models.map { WhisperModels.file(this, it).absolutePath },
                     vadModel = WhisperModels.file(this, WhisperModels.speechDetector).absolutePath,
+                    automaticSpeed = selectedSpeed() == WhisperSpeed.AUTOMATIC,
                 )
+                // Load the speech model while Android's sharing question is on screen.
+                WhisperEngine.preload(this, launch.whisperRequest())
                 runOnUiThread { requestSoundSharing(launch) }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -278,10 +286,15 @@ class MainActivity : AppCompatActivity() {
     private fun requestSoundSharing(launch: Launch) {
         pendingLaunch = launch
         progress.visibility = View.GONE
-        setStatus("Android will now ask to share your screen. Tap Start. Only the sound is used.")
+        setStatus(
+            "Android will now ask what to share. Choose “A single app” and pick the app you'll watch, such as " +
+                "TikTok, so your notifications stay visible. Only the sound is used.",
+        )
         val manager = getSystemService(MediaProjectionManager::class.java)
+        // Let the user share a single app or the whole screen. Sharing one app keeps notifications visible,
+        // because Android hides notification content while the whole screen is shared.
         val request = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+            manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForUserChoice())
         } else {
             manager.createScreenCaptureIntent()
         }
@@ -296,9 +309,9 @@ class MainActivity : AppCompatActivity() {
             putExtra(CaptionService.EXTRA_TARGET, selectedCaption().code)
             if (launch.auto) {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_AUTO)
-                putExtra(CaptionService.EXTRA_WHISPER_MODEL, launch.whisperModel)
-                putExtra(CaptionService.EXTRA_WHISPER_FALLBACK, launch.whisperFallback)
+                putExtra(CaptionService.EXTRA_WHISPER_MODELS, launch.whisperModels.toTypedArray())
                 putExtra(CaptionService.EXTRA_VAD_PATH, launch.vadModel)
+                putExtra(CaptionService.EXTRA_AUTOMATIC_SPEED, launch.automaticSpeed)
             } else {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_LIVE)
                 putExtra(CaptionService.EXTRA_MODEL_PATH, launch.voskModel)
@@ -309,7 +322,11 @@ class MainActivity : AppCompatActivity() {
         CaptionService.isRunning = true
         refreshUi()
         setStatus(runningMessage())
-        openTikTok()
+        // After sharing a single app, Android has already opened it. After sharing the whole screen,
+        // the user is back here, so open TikTok for them.
+        window.decorView.postDelayed({
+            if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) openTikTok()
+        }, 700L)
     }
 
     private fun stopCaptions() {
@@ -362,7 +379,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun runningMessage() =
-        "Captions are on. Play a TikTok and the words appear in the floating box. Drag the box to move it, or tap ✕ to stop."
+        "Captions are on. Play a TikTok and the words appear in the floating box. They clear when you swipe to " +
+            "the next video. Drag the box to move it, or tap ✕ to stop."
 
     private fun refreshUi() {
         val running = CaptionService.isRunning

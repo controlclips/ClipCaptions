@@ -8,11 +8,12 @@ import java.io.File
 /** A downloadable file for auto-detect mode. */
 data class WhisperFile(val label: String, val fileName: String, val url: String)
 
-/** The speed setting shown in the app. */
+/** The accuracy setting shown in the app. */
 enum class WhisperSpeed(val key: String, val label: String) {
-    AUTOMATIC("auto", "Automatic (suits this phone)"),
-    FASTER("fast", "Faster"),
-    MORE_ACCURATE("accurate", "More accurate"),
+    AUTOMATIC("auto", "Automatic (best this phone can keep up with)"),
+    FAST("fast", "Fast (31 MB)"),
+    BETTER("accurate", "Better (57 MB)"),
+    BEST("best", "Best (181 MB, recent phones only)"),
     ;
 
     companion object {
@@ -20,8 +21,13 @@ enum class WhisperSpeed(val key: String, val label: String) {
     }
 }
 
-/** What to download, which model to start with, and which to drop to if the phone can't keep up. */
-data class WhisperPlan(val files: List<WhisperFile>, val start: WhisperFile, val fallback: WhisperFile?)
+/**
+ * What to download, and the speech models to use in order: the first one to start with, then
+ * smaller ones to step down to if the phone can't keep up.
+ */
+data class WhisperPlan(val models: List<WhisperFile>) {
+    val downloads: List<WhisperFile> get() = models + WhisperModels.speechDetector
+}
 
 object WhisperModels {
 
@@ -31,7 +37,10 @@ object WhisperModels {
     val fast = WhisperFile("fast speech model", "ggml-tiny-q5_1.bin", MODEL_URL + "ggml-tiny-q5_1.bin")
 
     /** About 57 MB. Noticeably more accurate; needs a reasonably recent phone. */
-    val accurate = WhisperFile("accurate speech model", "ggml-base-q5_1.bin", MODEL_URL + "ggml-base-q5_1.bin")
+    val better = WhisperFile("better speech model", "ggml-base-q5_1.bin", MODEL_URL + "ggml-base-q5_1.bin")
+
+    /** About 181 MB. The most accurate; needs a powerful phone. */
+    val best = WhisperFile("best speech model", "ggml-small-q5_1.bin", MODEL_URL + "ggml-small-q5_1.bin")
 
     /** Under 1 MB. Tells speech apart from music and noise, so Whisper only works on speech. */
     val speechDetector = WhisperFile(
@@ -55,28 +64,34 @@ object WhisperModels {
     }
 
     fun plan(context: Context, speed: WhisperSpeed): WhisperPlan = when (speed) {
-        WhisperSpeed.FASTER -> WhisperPlan(listOf(fast, speechDetector), fast, null)
-        WhisperSpeed.MORE_ACCURATE -> WhisperPlan(listOf(accurate, speechDetector), accurate, null)
-        WhisperSpeed.AUTOMATIC ->
-            if (DeviceProfile.canRunAccurateModel(context)) {
-                WhisperPlan(listOf(accurate, fast, speechDetector), accurate, fast)
-            } else {
-                WhisperPlan(listOf(fast, speechDetector), fast, null)
-            }
+        WhisperSpeed.FAST -> WhisperPlan(listOf(fast))
+        WhisperSpeed.BETTER -> WhisperPlan(listOf(better, fast))
+        WhisperSpeed.BEST -> WhisperPlan(listOf(best, better))
+        WhisperSpeed.AUTOMATIC -> when (DeviceProfile.tier(context)) {
+            DeviceTier.HIGH -> WhisperPlan(listOf(best, better))
+            DeviceTier.MID -> WhisperPlan(listOf(better, fast))
+            DeviceTier.LOW -> WhisperPlan(listOf(fast))
+        }
     }
 }
 
+enum class DeviceTier { LOW, MID, HIGH }
+
 object DeviceProfile {
 
-    /** Recent phones with enough memory and cores start on the accurate model. */
-    fun canRunAccurateModel(context: Context): Boolean {
+    fun tier(context: Context): DeviceTier {
         val manager = context.getSystemService(ActivityManager::class.java)
         val memory = ActivityManager.MemoryInfo()
         manager.getMemoryInfo(memory)
         val ramGb = memory.totalMem / (1024.0 * 1024.0 * 1024.0)
         val cores = Runtime.getRuntime().availableProcessors()
         val is64Bit = Build.SUPPORTED_64_BIT_ABIS.isNotEmpty()
-        return !manager.isLowRamDevice && is64Bit && cores >= 6 && ramGb >= 3.5
+
+        if (manager.isLowRamDevice || !is64Bit || cores < 6 || ramGb < 3.5) return DeviceTier.LOW
+        // Flagship-class: plenty of memory, a fast top core, and the faster Whisper build.
+        val fastCpu = WhisperLib.isFastBuild && CpuFeatures.maxFrequencyGhz() >= 2.8
+        if (ramGb >= 7.0 && cores >= 8 && fastCpu) return DeviceTier.HIGH
+        return DeviceTier.MID
     }
 
     /**
