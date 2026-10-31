@@ -37,8 +37,7 @@ class MainActivity : AppCompatActivity() {
     private data class Launch(
         val auto: Boolean,
         val voskModel: String? = null,
-        val whisperModel: String? = null,
-        val whisperFallback: String? = null,
+        val whisperModels: List<String> = emptyList(),
         val vadModel: String? = null,
     )
 
@@ -194,8 +193,8 @@ class MainActivity : AppCompatActivity() {
         setStatus("Getting automatic detection ready…")
         io.execute {
             try {
-                val total = plan.files.size
-                plan.files.forEachIndexed { index, item ->
+                val total = plan.downloads.size
+                plan.downloads.forEachIndexed { index, item ->
                     if (!WhisperModels.isDownloaded(this, item)) {
                         WhisperModels.ensure(this, item) { percent ->
                             runOnUiThread {
@@ -208,8 +207,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val launch = Launch(
                     auto = true,
-                    whisperModel = WhisperModels.file(this, plan.start).absolutePath,
-                    whisperFallback = plan.fallback?.let { WhisperModels.file(this, it).absolutePath },
+                    whisperModels = plan.models.map { WhisperModels.file(this, it).absolutePath },
                     vadModel = WhisperModels.file(this, WhisperModels.speechDetector).absolutePath,
                 )
                 runOnUiThread { requestSoundSharing(launch) }
@@ -296,8 +294,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(CaptionService.EXTRA_TARGET, selectedCaption().code)
             if (launch.auto) {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_AUTO)
-                putExtra(CaptionService.EXTRA_WHISPER_MODEL, launch.whisperModel)
-                putExtra(CaptionService.EXTRA_WHISPER_FALLBACK, launch.whisperFallback)
+                putExtra(CaptionService.EXTRA_WHISPER_MODELS, launch.whisperModels.toTypedArray())
                 putExtra(CaptionService.EXTRA_VAD_PATH, launch.vadModel)
             } else {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_LIVE)
@@ -362,7 +359,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun runningMessage() =
-        "Captions are on. Play a TikTok and the words appear in the floating box. Drag the box to move it, or tap ✕ to stop."
+        "Captions are on. Play a TikTok and the words appear in the floating box. They clear when you swipe to " +
+            "the next video. Drag the box to move it, or tap ✕ to stop."
 
     private fun refreshUi() {
         val running = CaptionService.isRunning

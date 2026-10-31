@@ -1,11 +1,25 @@
 package com.clipcaptions.app
 
+import android.os.Build
+import java.io.File
+
 /** Kotlin side of the whisper.cpp bridge in src/main/cpp/whisper_jni.c. */
 object WhisperLib {
 
-    /** False if this phone can't load the Whisper library; the app then offers word-by-word mode only. */
-    val available: Boolean = try {
-        System.loadLibrary("clipwhisper")
+    /** True when the faster build (for phones with dot-product instructions) is the one loaded. */
+    val isFastBuild: Boolean
+
+    /** False if this phone can't load Whisper at all; the app then offers word-by-word mode only. */
+    val available: Boolean
+
+    init {
+        val fast = CpuFeatures.supportsFastBuild() && tryLoad("clipwhisper_fast")
+        isFastBuild = fast
+        available = fast || tryLoad("clipwhisper")
+    }
+
+    private fun tryLoad(name: String): Boolean = try {
+        System.loadLibrary(name)
         true
     } catch (e: Throwable) {
         false
@@ -20,12 +34,19 @@ object WhisperLib {
 
     /**
      * Turns 16 kHz mono audio (-1..1) into text, or into English text when [translate] is true.
+     * [language] is a code such as "es" when the language is known, or "auto" to detect it.
      * Returns UTF-8 bytes (empty if no speech was found) or null on failure.
      */
     @JvmStatic
-    external fun nativeTranscribe(handle: Long, samples: FloatArray, threads: Int, translate: Boolean): ByteArray?
+    external fun nativeTranscribe(
+        handle: Long,
+        samples: FloatArray,
+        threads: Int,
+        translate: Boolean,
+        language: String,
+    ): ByteArray?
 
-    /** The language detected in the last chunk, such as "es", or "" if unknown. */
+    /** The language of the last chunk, such as "es", or "" if unknown. */
     @JvmStatic
     external fun nativeLanguage(handle: Long): String
 
@@ -39,4 +60,40 @@ object WhisperLib {
     /** True if the chunk holds enough speech to be worth sending to Whisper (music and noise don't count). */
     @JvmStatic
     external fun nativeHasSpeech(handle: Long, samples: FloatArray): Boolean
+}
+
+object CpuFeatures {
+
+    /**
+     * The faster build needs ARMv8.2 dot-product and half-precision maths on every core.
+     * Phones without them would crash on those instructions, so anything unclear counts as no.
+     */
+    fun supportsFastBuild(): Boolean {
+        if (Build.SUPPORTED_ABIS.firstOrNull() != "arm64-v8a") return false
+        val featureLines = try {
+            File("/proc/cpuinfo").readLines().filter { it.trimStart().startsWith("Features") }
+        } catch (e: Exception) {
+            return false
+        }
+        if (featureLines.isEmpty()) return false
+        val needed = listOf("asimddp", "fphp", "asimdhp")
+        return featureLines.all { line ->
+            val features = line.substringAfter(':').trim().split(Regex("\\s+")).toSet()
+            needed.all { it in features }
+        }
+    }
+
+    /** The fastest core's top speed in GHz, or 0 if the phone doesn't say. */
+    fun maxFrequencyGhz(): Double {
+        var maxKhz = 0L
+        val cores = Runtime.getRuntime().availableProcessors()
+        for (i in 0 until cores) {
+            try {
+                val khz = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq").readText().trim().toLong()
+                if (khz > maxKhz) maxKhz = khz
+            } catch (ignored: Exception) {
+            }
+        }
+        return maxKhz / 1_000_000.0
+    }
 }

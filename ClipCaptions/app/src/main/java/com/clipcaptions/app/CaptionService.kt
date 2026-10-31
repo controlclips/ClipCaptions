@@ -11,7 +11,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioPlaybackCaptureConfiguration
+import android.media.AudioPlaybackConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -43,8 +45,10 @@ import kotlin.math.abs
  * it in the floating caption box. Nothing is recorded or saved.
  *
  * Two modes:
- * - Auto: Whisper detects the language of each chunk of speech (a few seconds behind).
+ * - Auto: Whisper detects the language of each video (captions a few seconds behind).
  * - Live: Vosk writes the chosen language word by word.
+ *
+ * In both, moving on to another video clears the captions and starts afresh.
  */
 class CaptionService : Service() {
 
@@ -60,9 +64,8 @@ class CaptionService : Service() {
         const val EXTRA_MODEL_PATH = "modelPath"
         const val EXTRA_SOURCE = "source"
 
-        // Auto mode
-        const val EXTRA_WHISPER_MODEL = "whisperModel"
-        const val EXTRA_WHISPER_FALLBACK = "whisperFallback"
+        // Auto mode: speech models in order of preference, then the speech detector.
+        const val EXTRA_WHISPER_MODELS = "whisperModels"
         const val EXTRA_VAD_PATH = "vadPath"
 
         const val MODE_AUTO = "auto"
@@ -74,12 +77,12 @@ class CaptionService : Service() {
         private const val MAX_WORDS_PER_LINE = 16
         private const val SILENCE_WARNING_MS = 15_000L
         private const val SOUND_LEVEL = 400
-        private val englishNoise = setOf("the", "a", "huh", "uh", "um", "hmm")
 
-        // Auto mode sends speech to Whisper in chunks, cut at a pause where possible.
-        private const val MIN_CHUNK_MS = 2500
-        private const val MAX_CHUNK_MS = 7000
-        private const val PAUSE_MS = 400
+        // After a switch to another video, skip this much sound: it can still hold the old video.
+        private const val SWITCH_SKIP_SAMPLES = SAMPLE_RATE / 4
+
+        private val englishNoise = setOf("the", "a", "huh", "uh", "um", "hmm")
+        private val playerId = Regex("""piid:(\d+)""")
 
         private const val NO_SOUND_HINT =
             "No sound is coming through. Play a video with the sound on. " +
@@ -89,6 +92,12 @@ class CaptionService : Service() {
         var isRunning = false
     }
 
+    /** A piece of speech for Whisper, tagged with the video it came from. */
+    private class Chunk(val samples: FloatArray, val video: Int)
+
+    /** What Whisper made of a chunk. */
+    private class WhisperResult(val text: String, val language: String, val translatedByWhisper: Boolean, val video: Int)
+
     private val main = Handler(Looper.getMainLooper())
     private var projection: MediaProjection? = null
     private var overlay: CaptionOverlay? = null
@@ -97,7 +106,13 @@ class CaptionService : Service() {
 
     @Volatile
     private var keepRunning = false
+    private var autoMode = false
     private var targetCode = "en"
+
+    // Bumped every time you move on to another video; work from an older video is thrown away.
+    private val video = AtomicInteger(0)
+    private val switchLogic = VideoSwitchLogic()
+    private var audioManager: AudioManager? = null
 
     // Live mode
     private var sourceCode = "en"
@@ -107,17 +122,22 @@ class CaptionService : Service() {
     private var pendingLive: String? = null
 
     // Auto mode
-    @Volatile
-    private var translateToEnglish = false
     private var lastLanguage = ""
     private val translators = HashMap<String, Translator>()
     private val readyLanguages = HashSet<String>()
-    private val pendingChunks = ArrayBlockingQueue<FloatArray>(1)
+    private val announcedDownloads = HashSet<String>()
+    private val pendingChunks = ArrayBlockingQueue<Chunk>(1)
     private val droppedChunks = AtomicInteger(0)
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
             main.post { stopSelf() }
+        }
+    }
+
+    private val playbackCallback = object : AudioManager.AudioPlaybackCallback() {
+        override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
+            onPlayersChanged(configs)
         }
     }
 
@@ -132,9 +152,9 @@ class CaptionService : Service() {
 
         val resultCode = command.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         val data = IntentCompat.getParcelableExtra(command, EXTRA_RESULT_DATA, Intent::class.java)
-        val autoMode = command.getStringExtra(EXTRA_MODE) == MODE_AUTO
+        val wantsAuto = command.getStringExtra(EXTRA_MODE) == MODE_AUTO
         val voskModel = command.getStringExtra(EXTRA_MODEL_PATH)
-        val whisperModel = command.getStringExtra(EXTRA_WHISPER_MODEL)
+        val whisperModels = command.getStringArrayExtra(EXTRA_WHISPER_MODELS)?.toList().orEmpty()
 
         // Android requires the foreground notification before the sound capture can begin.
         try {
@@ -144,7 +164,7 @@ class CaptionService : Service() {
             return START_NOT_STICKY
         }
         if (projection != null) return START_NOT_STICKY // Already running.
-        val modelReady = if (autoMode) whisperModel != null else voskModel != null
+        val modelReady = if (wantsAuto) whisperModels.isNotEmpty() else voskModel != null
         if (resultCode != Activity.RESULT_OK || data == null || !modelReady) {
             stopSelf()
             return START_NOT_STICKY
@@ -163,15 +183,13 @@ class CaptionService : Service() {
         projection = mp
         isRunning = true
         targetCode = command.getStringExtra(EXTRA_TARGET) ?: "en"
+        autoMode = wantsAuto
 
-        if (autoMode && whisperModel != null) {
-            translateToEnglish = targetCode == "en"
-            val label = "AUTO-DETECT → ${Languages.nameFor(targetCode).uppercase()}"
-            if (!showOverlay(label)) return START_NOT_STICKY
-            val fallback = command.getStringExtra(EXTRA_WHISPER_FALLBACK)
+        if (wantsAuto) {
+            if (!showOverlay(autoStartLabel())) return START_NOT_STICKY
             val vad = command.getStringExtra(EXTRA_VAD_PATH)
             keepRunning = true
-            whisperThread = Thread({ whisperLoop(whisperModel, fallback, vad) }, "caption-whisper").also { it.start() }
+            whisperThread = Thread({ whisperLoop(whisperModels, vad) }, "caption-whisper").also { it.start() }
             captureThread = Thread({ captureForWhisper(mp) }, "caption-capture").also { it.start() }
         } else if (voskModel != null) {
             sourceCode = command.getStringExtra(EXTRA_SOURCE) ?: "en"
@@ -185,12 +203,19 @@ class CaptionService : Service() {
             keepRunning = true
             captureThread = Thread({ captureForVosk(mp, voskModel) }, "caption-capture").also { it.start() }
         }
+
+        // Watch which media players start, to spot moves to another video.
+        val am = getSystemService(AudioManager::class.java)
+        am.registerAudioPlaybackCallback(playbackCallback, main)
+        audioManager = am
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         keepRunning = false
         isRunning = false
+        audioManager?.unregisterAudioPlaybackCallback(playbackCallback)
+        audioManager = null
         try {
             captureThread?.join(400)
         } catch (ignored: InterruptedException) {
@@ -214,7 +239,12 @@ class CaptionService : Service() {
     }
 
     private fun showOverlay(label: String): Boolean {
-        val box = CaptionOverlay(this, label) { stopSelf() }
+        val box = CaptionOverlay(
+            this,
+            label,
+            onClose = { stopSelf() },
+            onScreenTouched = { switchLogic.onTouch(SystemClock.elapsedRealtime()) },
+        )
         return try {
             box.show()
             overlay = box
@@ -271,6 +301,39 @@ class CaptionService : Service() {
             .setTargetLanguage(to)
             .build()
         return Translation.getClient(options)
+    }
+
+    // ---- Spotting a move to another video (main thread) ----
+
+    private fun onPlayersChanged(configs: List<AudioPlaybackConfiguration>) {
+        val players = HashSet<Int>()
+        for (config in configs) {
+            val usage = config.audioAttributes.usage
+            if (usage != AudioAttributes.USAGE_MEDIA &&
+                usage != AudioAttributes.USAGE_GAME &&
+                usage != AudioAttributes.USAGE_UNKNOWN
+            ) {
+                continue
+            }
+            // Android doesn't offer the player's id directly, but includes it in the description.
+            val id = playerId.find(config.toString())?.groupValues?.get(1)?.toIntOrNull() ?: config.hashCode()
+            players.add(id)
+        }
+        if (switchLogic.onPlayersChanged(players, SystemClock.elapsedRealtime())) onNewVideo()
+    }
+
+    private fun onNewVideo() {
+        val box = overlay ?: return
+        video.incrementAndGet()
+        box.clearCaptions()
+        if (autoMode) {
+            lastLanguage = ""
+            pendingChunks.clear()
+            box.setLabel(autoStartLabel())
+        } else {
+            liveGeneration++
+            pendingLive = null
+        }
     }
 
     // ---- Sound capture (capture thread) ----
@@ -336,12 +399,10 @@ class CaptionService : Service() {
             record = audio
             audio.startRecording()
             val silence = SilenceWatcher()
+            val chunker = SpeechChunker(sampleRate = SAMPLE_RATE, loudLevel = SOUND_LEVEL)
             val buffer = ShortArray(SAMPLE_RATE / 10) // 0.1 s
-            val maxSamples = SAMPLE_RATE * MAX_CHUNK_MS / 1000
-            val chunk = FloatArray(maxSamples)
-            var length = 0
-            var heardSound = false
-            var quietMs = 0
+            var currentVideo = video.get()
+            var skip = 0
 
             while (keepRunning) {
                 val read = audio.read(buffer, 0, buffer.size)
@@ -353,38 +414,20 @@ class CaptionService : Service() {
                     val level = abs(buffer[i].toInt())
                     if (level > peak) peak = level
                 }
-                val loud = peak > SOUND_LEVEL
-                silence.onAudio(loud)
+                silence.onAudio(peak > SOUND_LEVEL)
 
-                if (length + read > maxSamples) {
-                    if (heardSound) submitChunk(chunk.copyOf(length))
-                    length = 0
-                    heardSound = false
-                    quietMs = 0
+                val nowVideo = video.get()
+                if (nowVideo != currentVideo) {
+                    // Another video: drop the old one's sound, including the moment of the switch.
+                    currentVideo = nowVideo
+                    chunker.reset()
+                    skip = SWITCH_SKIP_SAMPLES
                 }
-                for (i in 0 until read) chunk[length + i] = buffer[i] / 32768f
-                length += read
-                if (loud) {
-                    heardSound = true
-                    quietMs = 0
-                } else {
-                    quietMs += read * 1000 / SAMPLE_RATE
+                if (skip > 0) {
+                    skip -= read
+                    continue
                 }
-
-                val chunkMs = length * 1000 / SAMPLE_RATE
-                if (!heardSound) {
-                    // Only quiet so far: keep the last moment, so speech that starts softly isn't clipped.
-                    if (chunkMs >= 1000) {
-                        val keep = SAMPLE_RATE * 3 / 10
-                        System.arraycopy(chunk, length - keep, chunk, 0, keep)
-                        length = keep
-                    }
-                } else if ((chunkMs >= MIN_CHUNK_MS && quietMs >= PAUSE_MS) || chunkMs >= MAX_CHUNK_MS) {
-                    submitChunk(chunk.copyOf(length))
-                    length = 0
-                    heardSound = false
-                    quietMs = 0
-                }
+                for (samples in chunker.add(buffer, read)) submitChunk(Chunk(samples, currentVideo))
             }
         } catch (e: Exception) {
             reportStop(e)
@@ -398,20 +441,22 @@ class CaptionService : Service() {
     }
 
     /** Hands a chunk to Whisper. If Whisper is still busy with an older one, the older one is dropped. */
-    private fun submitChunk(samples: FloatArray) {
-        if (!pendingChunks.offer(samples)) {
+    private fun submitChunk(chunk: Chunk) {
+        if (!pendingChunks.offer(chunk)) {
             pendingChunks.poll()
             droppedChunks.incrementAndGet()
-            pendingChunks.offer(samples)
+            pendingChunks.offer(chunk)
         }
     }
 
-    private fun whisperLoop(modelPath: String, fallbackPath: String?, vadPath: String?) {
-        var handle = WhisperLib.nativeInit(modelPath)
-        var onFallback = false
-        if (handle == 0L && fallbackPath != null) {
-            handle = WhisperLib.nativeInit(fallbackPath)
-            onFallback = true
+    private fun whisperLoop(modelPaths: List<String>, vadPath: String?) {
+        // Start with the first model that loads; smaller ones later in the list are the step-downs.
+        var level = 0
+        var handle = 0L
+        while (level < modelPaths.size) {
+            handle = WhisperLib.nativeInit(modelPaths[level])
+            if (handle != 0L) break
+            level++
         }
         if (handle == 0L) {
             main.post {
@@ -426,43 +471,61 @@ class CaptionService : Service() {
         main.post { overlay?.setStatus("Listening… play a video") }
 
         val threads = DeviceProfile.threads()
+        val languageLock = LanguageLock()
+        var lockVideo = -1
         var slowScore = 0
         var previousText = ""
         try {
             while (keepRunning) {
                 val chunk = pendingChunks.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                if (chunk.video != video.get()) continue // From a video you've already moved on from.
+                if (chunk.video != lockVideo) {
+                    lockVideo = chunk.video
+                    languageLock.reset()
+                    previousText = ""
+                }
+
                 val started = SystemClock.elapsedRealtime()
-                if (vad != 0L && !WhisperLib.nativeHasSpeech(vad, chunk)) {
+                if (vad != 0L && !WhisperLib.nativeHasSpeech(vad, chunk.samples)) {
                     slowScore = (slowScore - 1).coerceAtLeast(0)
                     continue
                 }
-                val bytes = WhisperLib.nativeTranscribe(handle, chunk, threads, translateToEnglish)
+
+                // Once a video's language is settled, Whisper is told it rather than guessing every chunk.
+                val language = languageLock.locked
+                // Whisper writes the words in their own language and ML Kit translates them, which is more
+                // accurate with these model sizes. Whisper only translates languages ML Kit can't.
+                val whisperTranslates = language != null && targetCode == "en" && language != "en" &&
+                    TranslateLanguage.fromLanguageTag(language) == null
+                val bytes = WhisperLib.nativeTranscribe(handle, chunk.samples, threads, whisperTranslates, language ?: "auto")
                 val elapsed = SystemClock.elapsedRealtime() - started
                 if (!keepRunning) break
 
-                val language = WhisperLib.nativeLanguage(handle)
+                val heard = WhisperLib.nativeLanguage(handle)
                 val text = if (bytes == null) "" else WhisperText.clean(String(bytes, Charsets.UTF_8))
+                if (text.isNotEmpty()) languageLock.record(heard)
                 if (text.isNotEmpty() && text != previousText) {
                     previousText = text
-                    main.post { onAutoText(text, language) }
+                    val result = WhisperResult(text, heard, whisperTranslates, chunk.video)
+                    main.post { onAutoText(result) }
                 }
 
-                // If this phone can't keep up, move to the faster model.
-                val audioMs = chunk.size * 1000L / SAMPLE_RATE
+                // If this phone can't keep up, step down to a smaller model.
+                val audioMs = chunk.samples.size * 1000L / SAMPLE_RATE
                 val dropped = droppedChunks.getAndSet(0)
                 slowScore = when {
                     dropped > 0 -> slowScore + 2
                     elapsed > audioMs * 85 / 100 -> slowScore + 1
                     else -> (slowScore - 1).coerceAtLeast(0)
                 }
-                if (slowScore >= 4 && !onFallback && fallbackPath != null) {
-                    val faster = WhisperLib.nativeInit(fallbackPath)
-                    if (faster != 0L) {
+                if (slowScore >= 4 && level + 1 < modelPaths.size) {
+                    val smaller = WhisperLib.nativeInit(modelPaths[level + 1])
+                    if (smaller != 0L) {
                         WhisperLib.nativeFree(handle)
-                        handle = faster
-                        onFallback = true
+                        handle = smaller
+                        level++
                         slowScore = 0
-                        main.post { overlay?.flashHint("Switched to the faster speech model so captions keep up.") }
+                        main.post { overlay?.flashHint("Switched to a faster speech model so captions keep up.") }
                     }
                 }
             }
@@ -474,16 +537,18 @@ class CaptionService : Service() {
         }
     }
 
-    /** Main thread: shows a chunk of Whisper text, translating it when needed. */
-    private fun onAutoText(text: String, language: String) {
+    /** Main thread: shows what Whisper heard, translating it when needed. */
+    private fun onAutoText(result: WhisperResult) {
+        if (result.video != video.get()) return
         val box = overlay ?: return
+        val language = result.language
         if (language.isNotEmpty() && language != lastLanguage) {
             lastLanguage = language
             box.setLabel(autoLabel(language))
         }
 
-        // Whisper already translated into English, or it's already in the chosen language.
-        if (translateToEnglish || language.isEmpty() || language == targetCode) {
+        val text = result.text
+        if (result.translatedByWhisper || language.isEmpty() || language == targetCode) {
             box.addLine(text, false)
             return
         }
@@ -493,17 +558,24 @@ class CaptionService : Service() {
             box.addLine(text, false)
             return
         }
-        if (language !in readyLanguages) {
+        if (language in readyLanguages) {
+            val id = box.addLine(text, true)
+            tr.translate(text)
+                .addOnSuccessListener { translated -> overlay?.setTranslation(id, translated) }
+                .addOnFailureListener { overlay?.setTranslation(id, text) }
+            return
+        }
+        // First time this language turns up: show the words as heard until its translation has downloaded.
+        val id = box.addLine(text, false)
+        if (announcedDownloads.add(language)) {
             box.flashHint("Getting ${Languages.nameFor(language)} translation ready (first time only)…")
         }
-        val id = box.addLine(text, true)
         tr.downloadModelIfNeeded()
             .onSuccessTask { tr.translate(text) }
             .addOnSuccessListener { translated ->
                 readyLanguages.add(language)
                 overlay?.setTranslation(id, translated)
             }
-            .addOnFailureListener { overlay?.setTranslation(id, text) }
     }
 
     private fun translatorFor(language: String): Translator? {
@@ -512,6 +584,8 @@ class CaptionService : Service() {
         translators[language] = created
         return created
     }
+
+    private fun autoStartLabel() = "AUTO-DETECT → ${Languages.nameFor(targetCode).uppercase()}"
 
     private fun autoLabel(language: String): String {
         val heard = Languages.nameFor(language)
@@ -540,6 +614,8 @@ class CaptionService : Service() {
             val silence = SilenceWatcher()
             val buffer = ByteArray(3200) // 0.1 s of 16 kHz, 16-bit mono sound.
             var lastPartial = ""
+            var currentVideo = video.get()
+            var skip = 0
 
             while (keepRunning) {
                 val read = audio.read(buffer, 0, buffer.size)
@@ -547,9 +623,22 @@ class CaptionService : Service() {
                 if (read == 0) continue
                 silence.onAudio(peakLevel(buffer, read) > SOUND_LEVEL)
 
+                val nowVideo = video.get()
+                if (nowVideo != currentVideo) {
+                    // Another video: forget the half-heard sentence from the old one.
+                    currentVideo = nowVideo
+                    rec.reset()
+                    lastPartial = ""
+                    skip = SWITCH_SKIP_SAMPLES * 2 // bytes
+                }
+                if (skip > 0) {
+                    skip -= read
+                    continue
+                }
+
                 if (rec.acceptWaveForm(buffer, read)) {
                     lastPartial = ""
-                    deliverFinal(JSONObject(rec.result).optString("text"))
+                    deliverFinal(JSONObject(rec.result).optString("text"), currentVideo)
                 } else {
                     val partial = JSONObject(rec.partialResult).optString("partial")
                     if (partial != lastPartial) {
@@ -558,9 +647,10 @@ class CaptionService : Service() {
                         if (words >= MAX_WORDS_PER_LINE) {
                             // Long runs without a pause (fast talkers, music): break the line here.
                             lastPartial = ""
-                            deliverFinal(JSONObject(rec.finalResult).optString("text"))
+                            deliverFinal(JSONObject(rec.finalResult).optString("text"), currentVideo)
                         } else {
-                            main.post { onPartial(partial) }
+                            val forVideo = currentVideo
+                            main.post { if (forVideo == video.get()) onPartial(partial) }
                         }
                     }
                 }
@@ -578,12 +668,11 @@ class CaptionService : Service() {
         }
     }
 
-    private fun deliverFinal(raw: String) {
+    private fun deliverFinal(raw: String, forVideo: Int) {
         val text = tidy(raw)
-        if (text.isEmpty()) {
-            main.post { onPartial("") }
-        } else {
-            main.post { onFinal(text) }
+        main.post {
+            if (forVideo != video.get()) return@post
+            if (text.isEmpty()) onPartial("") else onFinal(text)
         }
     }
 
