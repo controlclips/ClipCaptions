@@ -20,25 +20,29 @@ import android.widget.TextView
 
 /**
  * The floating caption box drawn over other apps. Drag it up or down; tap ✕ to stop.
- * All methods must be called on the main thread.
+ * Each line shows its translation when there is one, "…" while a translation is on its way,
+ * or the words as heard. All methods must be called on the main thread.
  */
 class CaptionOverlay(
     private val context: Context,
-    private val translating: Boolean,
-    private val label: String,
+    initialLabel: String,
     private val onClose: () -> Unit,
 ) {
 
-    private class Line(val id: Int, val original: String, var translated: String?)
+    private class Line(val id: Int, val original: String, val awaiting: Boolean, var translated: String?)
 
     private val windowManager: WindowManager = context.getSystemService(WindowManager::class.java)
     private val lines = ArrayList<Line>()
     private var nextId = 1
+    private var label = initialLabel
     private var liveOriginal = ""
+    private var liveAwaiting = false
     private var liveTranslated: String? = null
     private var status: String? = null
+    private var hintToken = 0
 
     private lateinit var root: FrameLayout
+    private lateinit var labelView: TextView
     private lateinit var mainText: TextView
     private lateinit var originalText: TextView
     private lateinit var hintText: TextView
@@ -69,7 +73,7 @@ class CaptionOverlay(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val labelView = TextView(context).apply {
+        labelView = TextView(context).apply {
             text = label
             setTextColor(dimWhite)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
@@ -165,29 +169,51 @@ class CaptionOverlay(
         shown = false
     }
 
-    /** Placeholder shown before any words arrive, e.g. "Loading speech model…". */
+    /** The small heading, such as "SPANISH → ENGLISH". */
+    fun setLabel(text: String) {
+        label = text
+        if (shown) labelView.text = text
+    }
+
+    /** Placeholder shown before any words arrive, such as "Loading the speech model…". */
     fun setStatus(text: String?) {
         status = text
         render()
     }
 
-    /** A warning under the captions (no sound coming through, errors). Pass null to clear it. */
+    /** A warning under the captions that stays until changed. Pass null to clear it. */
     fun setHint(text: String?) {
+        hintToken++
+        showHint(text)
+    }
+
+    /** A note under the captions that disappears after a few seconds. */
+    fun flashHint(text: String) {
+        if (!shown) return
+        val token = ++hintToken
+        showHint(text)
+        root.postDelayed({ if (token == hintToken) showHint(null) }, 6000L)
+    }
+
+    private fun showHint(text: String?) {
         if (!shown) return
         hintText.text = text ?: ""
         hintText.visibility = if (text == null) View.GONE else View.VISIBLE
     }
 
-    /** The sentence still being spoken. */
-    fun setLive(original: String, translated: String?) {
-        liveOriginal = original
-        liveTranslated = translated
-        render()
-    }
-
-    /** Updates the words being spoken, keeping the last translation on screen until the new one is ready. */
-    fun setLiveOriginal(original: String) {
-        liveOriginal = original
+    /**
+     * The sentence still being spoken. Pass "" to clear it. While new words arrive, the previous
+     * translation stays on screen until the updated one is ready, so the text doesn't flicker.
+     */
+    fun setLive(original: String, awaitingTranslation: Boolean) {
+        if (original.isEmpty()) {
+            liveOriginal = ""
+            liveAwaiting = false
+            liveTranslated = null
+        } else {
+            liveOriginal = original
+            liveAwaiting = awaitingTranslation
+        }
         render()
     }
 
@@ -198,11 +224,12 @@ class CaptionOverlay(
     }
 
     /** Adds a finished sentence and returns its id, for attaching the translation later. */
-    fun addLine(original: String): Int {
-        val line = Line(nextId++, original, null)
+    fun addLine(original: String, awaitingTranslation: Boolean): Int {
+        val line = Line(nextId++, original, awaitingTranslation, null)
         lines.add(line)
         while (lines.size > 2) lines.removeAt(0)
         liveOriginal = ""
+        liveAwaiting = false
         liveTranslated = null
         status = null
         render()
@@ -220,14 +247,14 @@ class CaptionOverlay(
         val text = SpannableStringBuilder()
 
         lines.forEachIndexed { index, line ->
-            val shownText = if (translating) line.translated ?: "…" else line.original
+            val shownText = line.translated ?: if (line.awaiting) "…" else line.original
             if (text.isNotEmpty()) text.append('\n')
             val isNewest = index == lines.lastIndex && liveOriginal.isEmpty()
             text.appendColored(shownText, if (isNewest) white else olderWhite)
         }
 
         if (liveOriginal.isNotEmpty()) {
-            val liveText = if (translating) liveTranslated ?: "…" else liveOriginal
+            val liveText = liveTranslated ?: if (liveAwaiting) "…" else liveOriginal
             if (text.isNotEmpty()) text.append('\n')
             text.appendColored(liveText, dimWhite)
         }
@@ -235,10 +262,22 @@ class CaptionOverlay(
         if (text.isEmpty()) text.appendColored(status ?: "Listening…", dimWhite)
         mainText.text = text
 
-        if (translating) {
-            val source = liveOriginal.ifEmpty { lines.lastOrNull()?.original ?: "" }
+        // Under a translation, show the words as heard in small print.
+        val source: String
+        val isTranslated: Boolean
+        if (liveOriginal.isNotEmpty()) {
+            source = liveOriginal
+            isTranslated = liveAwaiting || liveTranslated != null
+        } else {
+            val last = lines.lastOrNull()
+            source = last?.original ?: ""
+            isTranslated = last != null && (last.awaiting || last.translated != null)
+        }
+        if (isTranslated && source.isNotEmpty()) {
             originalText.text = source
-            originalText.visibility = if (source.isEmpty()) View.GONE else View.VISIBLE
+            originalText.visibility = View.VISIBLE
+        } else {
+            originalText.visibility = View.GONE
         }
     }
 

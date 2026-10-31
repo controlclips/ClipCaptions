@@ -6,11 +6,9 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.zip.ZipInputStream
 
-/** Downloads and stores the offline speech models (one per spoken language, 30–90 MB each). */
+/** The word-by-word speech models (Vosk): one per spoken language, 30–90 MB each. */
 object VoskModels {
 
     private const val BASE_URL = "https://alphacephei.com/vosk/models/"
@@ -28,36 +26,7 @@ object VoskModels {
     /** Downloads and unpacks a model. Blocking: call it off the main thread. */
     fun download(context: Context, name: String, onProgress: (Int) -> Unit): File {
         val zip = File(context.cacheDir, "$name.zip")
-        val connection = URL("$BASE_URL$name.zip").openConnection() as HttpURLConnection
-        try {
-            connection.connectTimeout = 20_000
-            connection.readTimeout = 60_000
-            val code = connection.responseCode
-            if (code != HttpURLConnection.HTTP_OK) throw IOException("the download server answered $code")
-            val total = connection.contentLengthLong
-            connection.inputStream.use { input ->
-                FileOutputStream(zip).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var done = 0L
-                    var lastPercent = -1
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        output.write(buffer, 0, count)
-                        done += count
-                        if (total > 0) {
-                            val percent = (done * 100 / total).toInt()
-                            if (percent != lastPercent) {
-                                lastPercent = percent
-                                onProgress(percent)
-                            }
-                        }
-                    }
-                }
-            }
-        } finally {
-            connection.disconnect()
-        }
+        Downloads.download("$BASE_URL$name.zip", zip, onProgress)
 
         val staging = File(File(context.filesDir, "vosk"), "$name.partial")
         staging.deleteRecursively()

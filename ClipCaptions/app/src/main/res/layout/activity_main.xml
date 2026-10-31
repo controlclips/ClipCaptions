@@ -32,21 +32,52 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="28dp"
-            android:labelFor="@id/sourceSpinner"
             android:text="@string/label_source"
             android:textAppearance="?attr/textAppearanceLabelLarge" />
+
+        <RadioGroup
+            android:id="@+id/modeGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/modeAuto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/mode_auto" />
+
+            <RadioButton
+                android:id="@+id/modeLive"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/mode_live" />
+        </RadioGroup>
+
+        <TextView
+            android:id="@+id/autoUnavailable"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/auto_unavailable"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:visibility="gone" />
 
         <Spinner
             android:id="@+id/sourceSpinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
+            android:contentDescription="@string/source_description"
             android:minHeight="48dp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="20dp"
             android:labelFor="@id/targetSpinner"
             android:text="@string/label_target"
             android:textAppearance="?attr/textAppearanceLabelLarge" />
@@ -57,6 +88,35 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:minHeight="48dp" />
+
+        <LinearLayout
+            android:id="@+id/speedSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:labelFor="@id/speedSpinner"
+                android:text="@string/label_speed"
+                android:textAppearance="?attr/textAppearanceLabelLarge" />
+
+            <Spinner
+                android:id="@+id/speedSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:minHeight="48dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/speed_note"
+                android:textAppearance="?attr/textAppearanceBodySmall" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/startButton"
