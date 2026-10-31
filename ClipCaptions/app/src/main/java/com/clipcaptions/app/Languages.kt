@@ -1,5 +1,7 @@
 package com.clipcaptions.app
 
+import java.util.Locale
+
 /** A language the app can hear, with the offline Vosk speech model used for it. */
 data class SpokenLanguage(val name: String, val code: String, val voskModel: String)
 
@@ -54,8 +56,9 @@ object Languages {
     /** The speech models for these languages put a space between every word, which the written language doesn't use. */
     val writtenWithoutSpaces = setOf("zh", "ja")
 
+    /** A readable name for a language code, including the ~99 languages auto-detect can recognise. */
     fun nameFor(code: String): String =
         caption.firstOrNull { it.code == code }?.name
             ?: spoken.firstOrNull { it.code == code }?.name
-            ?: code
+            ?: Locale.forLanguageTag(code).getDisplayLanguage(Locale.ENGLISH).ifEmpty { code }
 }

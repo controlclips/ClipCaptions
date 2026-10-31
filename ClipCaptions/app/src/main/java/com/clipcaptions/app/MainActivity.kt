@@ -15,6 +15,8 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.ProgressBar
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
@@ -31,19 +33,34 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    /** Everything the caption service needs once Android has agreed to share the sound. */
+    private data class Launch(
+        val auto: Boolean,
+        val voskModel: String? = null,
+        val whisperModel: String? = null,
+        val whisperFallback: String? = null,
+        val vadModel: String? = null,
+    )
+
+    private lateinit var modeGroup: RadioGroup
+    private lateinit var modeAuto: RadioButton
+    private lateinit var modeLive: RadioButton
+    private lateinit var autoUnavailable: TextView
     private lateinit var sourceSpinner: Spinner
     private lateinit var targetSpinner: Spinner
+    private lateinit var speedSection: View
+    private lateinit var speedSpinner: Spinner
     private lateinit var startButton: Button
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
 
     private val io = Executors.newSingleThreadExecutor()
     private var busy = false
-    private var pendingModelPath: String? = null
+    private var pendingLaunch: Launch? = null
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (hasAudioPermission()) {
-            prepareSpeechModel()
+            if (isAutoMode()) prepareAuto() else prepareSpeechModel()
         } else {
             fail(
                 "Clip Captions needs the Microphone permission. Android uses that permission for capturing " +
@@ -54,13 +71,13 @@ class MainActivity : AppCompatActivity() {
 
     private val captureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data
-        val modelPath = pendingModelPath
-        if (result.resultCode != Activity.RESULT_OK || data == null || modelPath == null) {
+        val launch = pendingLaunch
+        if (result.resultCode != Activity.RESULT_OK || data == null || launch == null) {
             fail("Captions didn't start because the sharing request was cancelled. Tap Start captions to try again.")
             return@registerForActivityResult
         }
         busy = false
-        startCaptionService(result.resultCode, data, modelPath)
+        startCaptionService(result.resultCode, data, launch)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,8 +92,14 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
+        modeGroup = findViewById(R.id.modeGroup)
+        modeAuto = findViewById(R.id.modeAuto)
+        modeLive = findViewById(R.id.modeLive)
+        autoUnavailable = findViewById(R.id.autoUnavailable)
         sourceSpinner = findViewById(R.id.sourceSpinner)
         targetSpinner = findViewById(R.id.targetSpinner)
+        speedSection = findViewById(R.id.speedSection)
+        speedSpinner = findViewById(R.id.speedSpinner)
         startButton = findViewById(R.id.startButton)
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
@@ -85,26 +108,47 @@ class MainActivity : AppCompatActivity() {
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         targetSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, Languages.caption.map { it.name })
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        speedSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, WhisperSpeed.entries.map { it.label })
+            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
 
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         val savedSource = prefs.getString("source", "en")
         val savedTarget = prefs.getString("target", "en")
         sourceSpinner.setSelection(Languages.spoken.indexOfFirst { it.code == savedSource }.coerceAtLeast(0))
         targetSpinner.setSelection(Languages.caption.indexOfFirst { it.code == savedTarget }.coerceAtLeast(0))
+        speedSpinner.setSelection(WhisperSpeed.entries.indexOf(WhisperSpeed.fromKey(prefs.getString("speed", null))))
 
+        // Automatic detection is the default wherever this phone can run it.
+        if (WhisperLib.available) {
+            val auto = prefs.getString("mode", CaptionService.MODE_AUTO) == CaptionService.MODE_AUTO
+            modeGroup.check(if (auto) R.id.modeAuto else R.id.modeLive)
+        } else {
+            modeAuto.isEnabled = false
+            autoUnavailable.visibility = View.VISIBLE
+            modeGroup.check(R.id.modeLive)
+        }
+        showModeSections()
+
+        val save = {
+            prefs.edit()
+                .putString("mode", if (isAutoMode()) CaptionService.MODE_AUTO else CaptionService.MODE_LIVE)
+                .putString("source", selectedSpoken().code)
+                .putString("target", selectedCaption().code)
+                .putString("speed", selectedSpeed().key)
+                .apply()
+            if (!busy && !CaptionService.isRunning) setStatus(describeChoice())
+        }
+        modeGroup.setOnCheckedChangeListener { _, _ ->
+            showModeSections()
+            save()
+        }
         val onChange = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                prefs.edit()
-                    .putString("source", selectedSpoken().code)
-                    .putString("target", selectedCaption().code)
-                    .apply()
-                if (!busy && !CaptionService.isRunning) setStatus(describeChoice())
-            }
-
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = save()
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
         sourceSpinner.onItemSelectedListener = onChange
         targetSpinner.onItemSelectedListener = onChange
+        speedSpinner.onItemSelectedListener = onChange
 
         startButton.setOnClickListener {
             if (CaptionService.isRunning) stopCaptions() else startCaptions()
@@ -122,7 +166,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    // ---- Start-up steps: overlay permission → sound permission → speech model → translation → share sound ----
+    // ---- Start-up: overlay permission → sound permission → downloads → share sound → start ----
 
     private fun startCaptions() {
         if (!Settings.canDrawOverlays(this)) {
@@ -135,9 +179,49 @@ class MainActivity : AppCompatActivity() {
         val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) needed += Manifest.permission.POST_NOTIFICATIONS
         val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isEmpty()) prepareSpeechModel() else permissionLauncher.launch(missing.toTypedArray())
+        when {
+            missing.isNotEmpty() -> permissionLauncher.launch(missing.toTypedArray())
+            isAutoMode() -> prepareAuto()
+            else -> prepareSpeechModel()
+        }
     }
 
+    /** Auto mode: the Whisper model(s) for this phone plus the speech detector. */
+    private fun prepareAuto() {
+        val plan = WhisperModels.plan(this, selectedSpeed())
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+        setStatus("Getting automatic detection ready…")
+        io.execute {
+            try {
+                val total = plan.files.size
+                plan.files.forEachIndexed { index, item ->
+                    if (!WhisperModels.isDownloaded(this, item)) {
+                        WhisperModels.ensure(this, item) { percent ->
+                            runOnUiThread {
+                                progress.isIndeterminate = false
+                                progress.progress = percent
+                                setStatus("Downloading the ${item.label}, ${index + 1} of $total (first time only)… $percent%")
+                            }
+                        }
+                    }
+                }
+                val launch = Launch(
+                    auto = true,
+                    whisperModel = WhisperModels.file(this, plan.start).absolutePath,
+                    whisperFallback = plan.fallback?.let { WhisperModels.file(this, it).absolutePath },
+                    vadModel = WhisperModels.file(this, WhisperModels.speechDetector).absolutePath,
+                )
+                runOnUiThread { requestSoundSharing(launch) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    fail("Couldn't download the automatic detection files: ${e.message}. Check your internet connection and tap Start captions again.")
+                }
+            }
+        }
+    }
+
+    /** Live mode: the Vosk model for the chosen language, then the translation files. */
     private fun prepareSpeechModel() {
         val spoken = selectedSpoken()
         val caption = selectedCaption()
@@ -164,8 +248,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun prepareTranslation(spoken: SpokenLanguage, caption: CaptionLanguage, modelPath: String) {
+        val launch = Launch(auto = false, voskModel = modelPath)
         if (spoken.code == caption.code) {
-            requestSoundSharing(modelPath)
+            requestSoundSharing(launch)
             return
         }
         val from = TranslateLanguage.fromLanguageTag(spoken.code)
@@ -182,7 +267,7 @@ class MainActivity : AppCompatActivity() {
         translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener {
                 translator.close()
-                requestSoundSharing(modelPath)
+                requestSoundSharing(launch)
             }
             .addOnFailureListener { e ->
                 translator.close()
@@ -190,8 +275,8 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun requestSoundSharing(modelPath: String) {
-        pendingModelPath = modelPath
+    private fun requestSoundSharing(launch: Launch) {
+        pendingLaunch = launch
         progress.visibility = View.GONE
         setStatus("Android will now ask to share your screen. Tap Start. Only the sound is used.")
         val manager = getSystemService(MediaProjectionManager::class.java)
@@ -203,14 +288,22 @@ class MainActivity : AppCompatActivity() {
         captureLauncher.launch(request)
     }
 
-    private fun startCaptionService(resultCode: Int, data: Intent, modelPath: String) {
+    private fun startCaptionService(resultCode: Int, data: Intent, launch: Launch) {
         val intent = Intent(this, CaptionService::class.java).apply {
             action = CaptionService.ACTION_START
             putExtra(CaptionService.EXTRA_RESULT_CODE, resultCode)
             putExtra(CaptionService.EXTRA_RESULT_DATA, data)
-            putExtra(CaptionService.EXTRA_MODEL_PATH, modelPath)
-            putExtra(CaptionService.EXTRA_SOURCE, selectedSpoken().code)
             putExtra(CaptionService.EXTRA_TARGET, selectedCaption().code)
+            if (launch.auto) {
+                putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_AUTO)
+                putExtra(CaptionService.EXTRA_WHISPER_MODEL, launch.whisperModel)
+                putExtra(CaptionService.EXTRA_WHISPER_FALLBACK, launch.whisperFallback)
+                putExtra(CaptionService.EXTRA_VAD_PATH, launch.vadModel)
+            } else {
+                putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_LIVE)
+                putExtra(CaptionService.EXTRA_MODEL_PATH, launch.voskModel)
+                putExtra(CaptionService.EXTRA_SOURCE, selectedSpoken().code)
+            }
         }
         ContextCompat.startForegroundService(this, intent)
         CaptionService.isRunning = true
@@ -237,17 +330,34 @@ class MainActivity : AppCompatActivity() {
     private fun hasAudioPermission() =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
+    private fun isAutoMode() = WhisperLib.available && modeGroup.checkedRadioButtonId == R.id.modeAuto
+
     private fun selectedSpoken() = Languages.spoken[sourceSpinner.selectedItemPosition.coerceAtLeast(0)]
 
     private fun selectedCaption() = Languages.caption[targetSpinner.selectedItemPosition.coerceAtLeast(0)]
 
+    private fun selectedSpeed() = WhisperSpeed.entries[speedSpinner.selectedItemPosition.coerceAtLeast(0)]
+
+    private fun showModeSections() {
+        val auto = isAutoMode()
+        sourceSpinner.visibility = if (auto) View.GONE else View.VISIBLE
+        speedSection.visibility = if (auto) View.VISIBLE else View.GONE
+    }
+
     private fun describeChoice(): String {
-        val spoken = selectedSpoken()
         val caption = selectedCaption()
+        if (isAutoMode()) {
+            return if (caption.code == "en") {
+                "Detects the language of each video and shows the words in English."
+            } else {
+                "Detects the language of each video and translates it into ${caption.name}."
+            }
+        }
+        val spoken = selectedSpoken()
         return if (spoken.code == caption.code) {
             "Shows ${spoken.name} speech as ${spoken.name} text. Pick another language under “Show the words in” to translate."
         } else {
-            "Translates ${spoken.name} speech into ${caption.name}."
+            "Translates ${spoken.name} speech into ${caption.name}, word by word."
         }
     }
 
@@ -256,10 +366,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshUi() {
         val running = CaptionService.isRunning
+        val editable = !busy && !running
         startButton.text = if (running) "Stop captions" else "Start captions"
         startButton.isEnabled = !busy
-        sourceSpinner.isEnabled = !busy && !running
-        targetSpinner.isEnabled = !busy && !running
+        modeAuto.isEnabled = editable && WhisperLib.available
+        modeLive.isEnabled = editable
+        sourceSpinner.isEnabled = editable
+        targetSpinner.isEnabled = editable
+        speedSpinner.isEnabled = editable
     }
 
     private fun setStatus(message: String) {
