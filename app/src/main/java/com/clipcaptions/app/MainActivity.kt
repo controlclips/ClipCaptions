@@ -33,9 +33,15 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    /** A choice in the Google language list. */
+    private data class GoogleOption(val tag: String?, val label: String, val installed: Boolean)
+
     /** Everything the caption service needs once Android has agreed to share the sound. */
     private data class Launch(
         val auto: Boolean,
+        val google: Boolean = false,
+        val googleLanguage: String? = null,
+        val googleSwitch: List<String> = emptyList(),
         val voskModel: String? = null,
         val whisperModels: List<String> = emptyList(),
         val vadModel: String? = null,
@@ -45,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var modeGroup: RadioGroup
+    private lateinit var modeGoogle: RadioButton
     private lateinit var modeAuto: RadioButton
     private lateinit var modeLive: RadioButton
     private lateinit var autoUnavailable: TextView
@@ -52,6 +59,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var targetSpinner: Spinner
     private lateinit var speedSection: View
     private lateinit var speedSpinner: Spinner
+    private lateinit var googleStatus: TextView
+    private lateinit var googleRecheck: Button
+    private lateinit var googleSection: View
+    private lateinit var googleSpinner: Spinner
+    private lateinit var sizeSpinner: Spinner
     private lateinit var startButton: Button
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
@@ -59,10 +71,16 @@ class MainActivity : AppCompatActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private var busy = false
     private var pendingLaunch: Launch? = null
+    private var googleSupport: GoogleSpeech.Support? = null
+    private var googleOptions: List<GoogleOption> = emptyList()
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (hasAudioPermission()) {
-            if (isAutoMode()) prepareAuto() else prepareSpeechModel()
+            when {
+                isGoogleMode() -> prepareGoogle()
+                isAutoMode() -> prepareAuto()
+                else -> prepareSpeechModel()
+            }
         } else {
             fail(
                 "Clip Captions needs the Microphone permission. Android uses that permission for capturing " +
@@ -96,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         modeGroup = findViewById(R.id.modeGroup)
+        modeGoogle = findViewById(R.id.modeGoogle)
         modeAuto = findViewById(R.id.modeAuto)
         modeLive = findViewById(R.id.modeLive)
         autoUnavailable = findViewById(R.id.autoUnavailable)
@@ -103,6 +122,11 @@ class MainActivity : AppCompatActivity() {
         targetSpinner = findViewById(R.id.targetSpinner)
         speedSection = findViewById(R.id.speedSection)
         speedSpinner = findViewById(R.id.speedSpinner)
+        googleStatus = findViewById(R.id.googleStatus)
+        googleRecheck = findViewById(R.id.googleRecheck)
+        googleSection = findViewById(R.id.googleSection)
+        googleSpinner = findViewById(R.id.googleSpinner)
+        sizeSpinner = findViewById(R.id.sizeSpinner)
         startButton = findViewById(R.id.startButton)
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
@@ -113,6 +137,8 @@ class MainActivity : AppCompatActivity() {
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         speedSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, WhisperSpeed.entries.map { it.label })
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        sizeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, CaptionSize.entries.map { it.label })
+            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
 
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         val savedSource = prefs.getString("source", "en")
@@ -120,24 +146,42 @@ class MainActivity : AppCompatActivity() {
         sourceSpinner.setSelection(Languages.spoken.indexOfFirst { it.code == savedSource }.coerceAtLeast(0))
         targetSpinner.setSelection(Languages.caption.indexOfFirst { it.code == savedTarget }.coerceAtLeast(0))
         speedSpinner.setSelection(WhisperSpeed.entries.indexOf(WhisperSpeed.fromKey(prefs.getString("speed", null))))
+        sizeSpinner.setSelection(CaptionSize.entries.indexOf(CaptionSize.fromKey(prefs.getString("caption_size", null))))
 
-        // Automatic detection is the default wherever this phone can run it.
-        if (WhisperLib.available) {
-            val auto = prefs.getString("mode", CaptionService.MODE_AUTO) == CaptionService.MODE_AUTO
-            modeGroup.check(if (auto) R.id.modeAuto else R.id.modeLive)
-        } else {
+        // Google is the default once the phone is found to support it (checked just below).
+        val savedMode = prefs.getString("mode", null)
+        if (!WhisperLib.available) {
             modeAuto.isEnabled = false
             autoUnavailable.visibility = View.VISIBLE
-            modeGroup.check(R.id.modeLive)
         }
+        modeGoogle.isEnabled = false
+        modeGroup.check(
+            when {
+                savedMode == CaptionService.MODE_LIVE || !WhisperLib.available -> R.id.modeLive
+                else -> R.id.modeAuto
+            },
+        )
         showModeSections()
+        checkGoogle(preferGoogle = savedMode == null || savedMode == CaptionService.MODE_GOOGLE)
+        googleRecheck.setOnClickListener {
+            GoogleSpeech.forgetAppSoundCheck(this)
+            checkGoogle(preferGoogle = true)
+        }
 
         val save = {
             // A new accuracy choice means Automatic should time the models again.
             val previousSpeed = prefs.getString("speed", null)
             if (previousSpeed != null && previousSpeed != selectedSpeed().key) WhisperEngine.forgetSpeedTests(this)
-            prefs.edit()
-                .putString("mode", if (isAutoMode()) CaptionService.MODE_AUTO else CaptionService.MODE_LIVE)
+            val mode = when {
+                isGoogleMode() -> CaptionService.MODE_GOOGLE
+                isAutoMode() -> CaptionService.MODE_AUTO
+                else -> CaptionService.MODE_LIVE
+            }
+            val edit = prefs.edit()
+            selectedGoogle()?.let { edit.putString("google_language", it.tag ?: "switch") }
+            edit
+                .putString("mode", mode)
+                .putString("caption_size", CaptionSize.entries[sizeSpinner.selectedItemPosition.coerceAtLeast(0)].key)
                 .putString("source", selectedSpoken().code)
                 .putString("target", selectedCaption().code)
                 .putString("speed", selectedSpeed().key)
@@ -155,6 +199,8 @@ class MainActivity : AppCompatActivity() {
         sourceSpinner.onItemSelectedListener = onChange
         targetSpinner.onItemSelectedListener = onChange
         speedSpinner.onItemSelectedListener = onChange
+        sizeSpinner.onItemSelectedListener = onChange
+        googleSpinner.onItemSelectedListener = onChange
 
         startButton.setOnClickListener {
             if (CaptionService.isRunning) stopCaptions() else startCaptions()
@@ -187,9 +233,119 @@ class MainActivity : AppCompatActivity() {
         val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         when {
             missing.isNotEmpty() -> permissionLauncher.launch(missing.toTypedArray())
+            isGoogleMode() -> prepareGoogle()
             isAutoMode() -> prepareAuto()
             else -> prepareSpeechModel()
         }
+    }
+
+    // ---- Google mode ----
+
+    /** Finds out whether this phone has Google's on-phone recogniser, and lists its languages. */
+    private fun checkGoogle(preferGoogle: Boolean) {
+        googleStatus.text = getString(R.string.google_checking)
+        googleRecheck.visibility = View.GONE
+        GoogleSpeech.checkSupport(this) { support ->
+            googleSupport = support
+            when (support) {
+                is GoogleSpeech.Support.Unavailable -> {
+                    modeGoogle.isEnabled = false
+                    googleStatus.text = "Google speech recognition: not available. ${support.reason}"
+                    googleRecheck.visibility = View.VISIBLE
+                    if (modeGroup.checkedRadioButtonId == R.id.modeGoogle) {
+                        modeGroup.check(if (WhisperLib.available) R.id.modeAuto else R.id.modeLive)
+                    }
+                }
+                is GoogleSpeech.Support.Ready -> {
+                    showGoogleLanguages(support)
+                    modeGoogle.isEnabled = !busy && !CaptionService.isRunning
+                    googleStatus.text = if (support.installed.isEmpty()) {
+                        "Google speech recognition: available. No languages downloaded yet; pick one below."
+                    } else {
+                        "Google speech recognition: ready. Downloaded: " +
+                            support.installed.joinToString(", ") { GoogleSpeech.displayName(it) } + "."
+                    }
+                    if (preferGoogle) modeGroup.check(R.id.modeGoogle)
+                }
+            }
+            showModeSections()
+            if (!busy && !CaptionService.isRunning) setStatus(describeChoice())
+        }
+    }
+
+    private fun showGoogleLanguages(support: GoogleSpeech.Support.Ready) {
+        val options = ArrayList<GoogleOption>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && support.installed.size > 1) {
+            val names = support.installed.joinToString(", ") { GoogleSpeech.displayName(it).substringBefore(" (") }
+            options += GoogleOption(null, "Switch automatically ($names)", true)
+        }
+        support.installed.sortedBy { GoogleSpeech.displayName(it) }
+            .forEach { options += GoogleOption(it, GoogleSpeech.displayName(it), true) }
+        support.downloadable.sortedBy { GoogleSpeech.displayName(it) }
+            .forEach { options += GoogleOption(it, GoogleSpeech.displayName(it) + " (download)", false) }
+        if (options.isEmpty()) {
+            // The phone didn't list its languages; offer the phone's own language.
+            val own = java.util.Locale.getDefault().toLanguageTag()
+            options += GoogleOption(own, GoogleSpeech.displayName(own), true)
+        }
+        googleOptions = options
+        googleSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, options.map { it.label })
+            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        val saved = getSharedPreferences("settings", MODE_PRIVATE).getString("google_language", null)
+        val ownLanguage = java.util.Locale.getDefault().language
+        val index = options.indexOfFirst { (it.tag ?: "switch") == saved }.takeIf { it >= 0 }
+            ?: options.indexOfFirst { it.installed && it.tag != null && GoogleSpeech.codeOf(it.tag) == ownLanguage }
+                .takeIf { it >= 0 }
+            ?: 0
+        googleSpinner.setSelection(index)
+    }
+
+    private fun selectedGoogle(): GoogleOption? = googleOptions.getOrNull(googleSpinner.selectedItemPosition)
+
+    /** Google mode: download the language if needed, then ask to share the sound. */
+    private fun prepareGoogle() {
+        val option = selectedGoogle()
+        val support = googleSupport as? GoogleSpeech.Support.Ready
+        if (option == null || support == null) {
+            fail("Google speech recognition isn't ready on this phone. Choose another option.")
+            return
+        }
+        if (!option.installed && option.tag != null) {
+            val name = GoogleSpeech.displayName(option.tag)
+            progress.visibility = View.VISIBLE
+            progress.isIndeterminate = true
+            setStatus("Asking the phone to download $name for Google speech…")
+            GoogleSpeech.download(this, option.tag) { problem ->
+                if (problem != null) {
+                    fail("Couldn't download $name: $problem")
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    // Downloaded: refresh the list, then carry on.
+                    fail("$name is downloaded. Tap Start captions.")
+                    checkGoogle(preferGoogle = true)
+                } else {
+                    fail("The phone is downloading $name. When it's finished, tap Start captions again.")
+                }
+            }
+            return
+        }
+        val primary = option.tag
+            ?: support.installed.firstOrNull { GoogleSpeech.codeOf(it) == java.util.Locale.getDefault().language }
+            ?: support.installed.first()
+        val switchTo = if (option.tag == null) support.installed else emptyList()
+
+        // If Whisper's files are already on the phone, pass them along as a backup.
+        val plan = WhisperModels.plan(this, selectedSpeed())
+        val backupReady = WhisperLib.available && plan.downloads.all { WhisperModels.isDownloaded(this, it) }
+        val launch = Launch(
+            auto = false,
+            google = true,
+            googleLanguage = primary,
+            googleSwitch = switchTo,
+            whisperModels = if (backupReady) plan.models.map { WhisperModels.file(this, it).absolutePath } else emptyList(),
+            vadModel = if (backupReady) WhisperModels.file(this, WhisperModels.speechDetector).absolutePath else null,
+            automaticSpeed = selectedSpeed() == WhisperSpeed.AUTOMATIC,
+        )
+        requestSoundSharing(launch)
     }
 
     /** Auto mode: the Whisper model(s) for this phone plus the speech detector. */
@@ -307,7 +463,16 @@ class MainActivity : AppCompatActivity() {
             putExtra(CaptionService.EXTRA_RESULT_CODE, resultCode)
             putExtra(CaptionService.EXTRA_RESULT_DATA, data)
             putExtra(CaptionService.EXTRA_TARGET, selectedCaption().code)
-            if (launch.auto) {
+            if (launch.google) {
+                putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_GOOGLE)
+                putExtra(CaptionService.EXTRA_GOOGLE_LANGUAGE, launch.googleLanguage)
+                putStringArrayListExtra(CaptionService.EXTRA_GOOGLE_SWITCH, ArrayList(launch.googleSwitch))
+                if (launch.whisperModels.isNotEmpty()) {
+                    putExtra(CaptionService.EXTRA_WHISPER_MODELS, launch.whisperModels.toTypedArray())
+                    putExtra(CaptionService.EXTRA_VAD_PATH, launch.vadModel)
+                    putExtra(CaptionService.EXTRA_AUTOMATIC_SPEED, launch.automaticSpeed)
+                }
+            } else if (launch.auto) {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_AUTO)
                 putExtra(CaptionService.EXTRA_WHISPER_MODELS, launch.whisperModels.toTypedArray())
                 putExtra(CaptionService.EXTRA_VAD_PATH, launch.vadModel)
@@ -347,6 +512,8 @@ class MainActivity : AppCompatActivity() {
     private fun hasAudioPermission() =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
+    private fun isGoogleMode() = modeGroup.checkedRadioButtonId == R.id.modeGoogle && googleSupport is GoogleSpeech.Support.Ready
+
     private fun isAutoMode() = WhisperLib.available && modeGroup.checkedRadioButtonId == R.id.modeAuto
 
     private fun selectedSpoken() = Languages.spoken[sourceSpinner.selectedItemPosition.coerceAtLeast(0)]
@@ -356,13 +523,19 @@ class MainActivity : AppCompatActivity() {
     private fun selectedSpeed() = WhisperSpeed.entries[speedSpinner.selectedItemPosition.coerceAtLeast(0)]
 
     private fun showModeSections() {
+        val google = isGoogleMode()
         val auto = isAutoMode()
-        sourceSpinner.visibility = if (auto) View.GONE else View.VISIBLE
+        googleSection.visibility = if (google) View.VISIBLE else View.GONE
+        sourceSpinner.visibility = if (google || auto) View.GONE else View.VISIBLE
         speedSection.visibility = if (auto) View.VISIBLE else View.GONE
     }
 
     private fun describeChoice(): String {
         val caption = selectedCaption()
+        if (isGoogleMode()) {
+            return "Google writes the words as people speak and Clip Captions translates them into ${caption.name}, " +
+                "all on your phone and free."
+        }
         if (isAutoMode()) {
             return if (caption.code == "en") {
                 "Detects the language of each video and shows the words in English."
@@ -387,8 +560,11 @@ class MainActivity : AppCompatActivity() {
         val editable = !busy && !running
         startButton.text = if (running) "Stop captions" else "Start captions"
         startButton.isEnabled = !busy
+        modeGoogle.isEnabled = editable && googleSupport is GoogleSpeech.Support.Ready
         modeAuto.isEnabled = editable && WhisperLib.available
         modeLive.isEnabled = editable
+        googleSpinner.isEnabled = editable
+        sizeSpinner.isEnabled = editable
         sourceSpinner.isEnabled = editable
         targetSpinner.isEnabled = editable
         speedSpinner.isEnabled = editable

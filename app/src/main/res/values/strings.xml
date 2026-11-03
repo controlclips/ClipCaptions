@@ -3,8 +3,14 @@
     <string name="app_name">Clip Captions</string>
     <string name="intro">Shows what people say in videos as text, translated, in a floating box over TikTok or any other app. It reads the phone\'s own sound, so it works with AirPods and other headphones.</string>
     <string name="label_source">Language in the videos</string>
-    <string name="mode_auto">Detect it automatically</string>
-    <string name="mode_live">I\'ll choose it (word by word, fastest)</string>
+    <string name="mode_google">Google, word by word (recommended)</string>
+    <string name="google_checking">Checking whether this phone has Google speech recognition…</string>
+    <string name="google_recheck">Check this phone again</string>
+    <string name="label_google_language">Language in the videos</string>
+    <string name="google_note">Uses the Google speech recognition built into your phone. It\'s free, it writes the words as people speak, and the sound never leaves the phone. Languages marked “download” are downloaded by the phone the first time.</string>
+    <string name="label_size">Caption size</string>
+    <string name="mode_auto">Whisper, any language detected automatically (slower)</string>
+    <string name="mode_live">Vosk, word by word (for phones without Google speech)</string>
     <string name="auto_unavailable">Automatic detection can\'t run on this phone, so choose the language below.</string>
     <string name="source_description">Language spoken in the videos</string>
     <string name="label_target">Show the words in</string>

@@ -4,9 +4,11 @@ An Android app that shows what people say in videos as text, translated into you
 
 It reads the sound the phone is playing, the same audio that goes to the speaker or to AirPods, so it works with headphones in. Everything runs on the phone, and nothing is recorded or uploaded.
 
-There are two ways to caption:
+There are three ways to caption, all free and all on the phone:
 
-- **Detect it automatically** (default). Whisper (OpenAI's free, open-source speech model, via whisper.cpp) works out the language of each video by itself, from about 99 languages. Captions appear in short bursts a few seconds after the speech.
+- **Google, word by word** (recommended). Uses the Google speech recognition built into the phone (Android 13 or newer, on phones that include Google's on-device recogniser). It's free, writes the words as they're spoken, and the sound never leaves the phone. Pick the language in the videos; on Android 14 or newer you can also let it switch automatically between the languages downloaded on the phone. Languages marked "download" are downloaded by the phone the first time.
+  - Safety check: if a phone's recogniser can't take app sound, Android has it use the microphone instead. The app checks within a couple of seconds that the recogniser really is reading the video's sound; if not, it stops straight away, shows nothing it heard, and switches to Whisper. "Check this phone again" retries later.
+- **Whisper, any language detected automatically.** Whisper (OpenAI's free, open-source speech model, via whisper.cpp) works out the language of each video by itself, from about 99 languages. Captions appear in short bursts a few seconds after the speech.
   - **Accuracy setting:** Fast (31 MB), Better (57 MB) or Best (181 MB). On Automatic, the app times each model once on the phone and uses the most accurate one that keeps captions quick. If captions start falling behind, it steps down to a smaller one by itself.
   - **Speed:** the model loads while Android's sharing question is on screen. Whisper only processes about 15 seconds of its 30-second window (our speech pieces are at most 6 seconds), which roughly halves the work. Speech is sent after about 1.6 seconds instead of waiting longer.
   - **Faster engine on newer phones:** 64-bit phones with ARMv8.2 dot-product instructions (most phones from about 2018 onwards) use a build of Whisper that's roughly twice as fast. Other phones use the standard build.
@@ -54,13 +56,14 @@ This key is only for test builds. Publishing on Google Play needs a separate pri
 
 ## Using it
 
-1. Open Clip Captions. Choose **Detect it automatically** (or pick the language yourself) and the language you want to read. Leave **Accuracy** on Automatic unless captions lag (choose Fast) or you want to try a bigger model (Better or Best).
+1. Open Clip Captions. Choose **Google, word by word** (and the language in the videos), **Whisper**, or **Vosk**, and the language you want to read. Leave **Accuracy** on Automatic unless captions lag (choose Fast) or you want to try a bigger model (Better or Best).
 2. Tap **Start captions**. The first time, allow **Display over other apps** and the sound permission (Android lists it as Microphone; the app doesn't use the microphone), then wait for the download.
 3. Android asks what to share. Choose **A single app** and pick the app you'll watch (for example TikTok). Your notifications stay visible, because Android hides notification content only while the whole screen is shared. Only the sound is used and nothing is saved, but Android shows its screen-sharing indicator while captions are on.
 4. TikTok opens. Play a video. Drag the caption box up or down; tap ✕ (or **Stop** in the notification) to turn captions off.
 
 ## Good to know
 
+- **Caption size** (Small, Medium, Large) is in the app, and the caption box remembers where you last dragged it.
 - Clear speech works best. Loud music under the voice, heavy slang and very fast talking reduce accuracy.
 - The first time a new language turns up, its words show untranslated for a few seconds while its translation downloads.
 - Choosing the language yourself uses a different, word-by-word engine (Vosk): it's faster but less accurate than automatic detection.
