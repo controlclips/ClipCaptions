@@ -43,6 +43,13 @@
             android:orientation="vertical">
 
             <RadioButton
+                android:id="@+id/modeGoogle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/mode_google" />
+
+            <RadioButton
                 android:id="@+id/modeAuto"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -56,6 +63,53 @@
                 android:minHeight="48dp"
                 android:text="@string/mode_live" />
         </RadioGroup>
+
+        <TextView
+            android:id="@+id/googleStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/google_checking"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
+
+        <Button
+            android:id="@+id/googleRecheck"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/google_recheck"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/googleSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:labelFor="@id/googleSpinner"
+                android:text="@string/label_google_language"
+                android:textAppearance="?attr/textAppearanceLabelLarge" />
+
+            <Spinner
+                android:id="@+id/googleSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:minHeight="48dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/google_note"
+                android:textAppearance="?attr/textAppearanceBodySmall" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/autoUnavailable"
@@ -84,6 +138,21 @@
 
         <Spinner
             android:id="@+id/targetSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:minHeight="48dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:labelFor="@id/sizeSpinner"
+            android:text="@string/label_size"
+            android:textAppearance="?attr/textAppearanceLabelLarge" />
+
+        <Spinner
+            android:id="@+id/sizeSpinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
