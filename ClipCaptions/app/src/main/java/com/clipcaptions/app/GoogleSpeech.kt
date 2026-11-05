@@ -253,6 +253,9 @@ class GoogleCaptioner(
 
         /** Google can't continue; [message] says why in plain words. */
         fun onProblem(message: String)
+
+        /** A new listening session began, so the next words start a new sentence. */
+        fun onSessionStarted() {}
     }
 
     companion object {
@@ -262,6 +265,10 @@ class GoogleCaptioner(
         private const val DEFAULT_PIPE = 65536
         private const val BLOCKED_LIMIT_MS = 2000L
         private const val CHECK_FOR_MS = 8000L
+
+        // Sound kept while Google restarts between sentences (20 blocks of 0.05 s = 1 second),
+        // then passed to the next session so the first words of the next sentence aren't lost.
+        private const val GAP_BLOCKS = 20
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -273,6 +280,9 @@ class GoogleCaptioner(
 
     @Volatile
     private var session: Session? = null
+
+    // Sound that arrived while no session was listening. Guarded by itself.
+    private val gap = ArrayDeque<ByteArray>()
 
     // Restart limits: a phone that keeps failing gets reported instead of retried for ever.
     private val failureTimes = ArrayDeque<Long>()
@@ -371,10 +381,28 @@ class GoogleCaptioner(
 
     /** Any thread. A block of 16 kHz, 16-bit mono sound. */
     fun feed(bytes: ByteArray, length: Int) {
-        val s = session ?: return
-        if (!s.open) return
+        if (stopped) return
         val block = bytes.copyOf(length)
-        // If the recogniser falls behind, drop the oldest sound rather than lag behind the video.
+        val s = session
+        if (s != null && s.open) {
+            offer(s, block)
+            return
+        }
+        synchronized(gap) {
+            // Check again: a session may have started in the meantime.
+            val now = session
+            if (now != null && now.open) {
+                offer(now, block)
+            } else {
+                // Between sessions: keep the last second, to hand to the next session.
+                gap.addLast(block)
+                while (gap.size > GAP_BLOCKS) gap.removeFirst()
+            }
+        }
+    }
+
+    /** If the recogniser falls behind, drop the oldest sound rather than lag behind the video. */
+    private fun offer(s: Session, block: ByteArray) {
         if (!s.queue.offer(block)) {
             s.queue.poll()
             s.queue.offer(block)
@@ -385,10 +413,13 @@ class GoogleCaptioner(
     fun newVideo() {
         if (stopped) return
         leftover.cut()
+        // Sound kept between sessions belongs to the old video.
+        synchronized(gap) { gap.clear() }
     }
 
     fun stop() {
         stopped = true
+        synchronized(gap) { gap.clear() }
         endSession(cancel = true)
         recognizer?.destroy()
         recognizer = null
@@ -410,8 +441,13 @@ class GoogleCaptioner(
             events.onProblem("Couldn't pass the sound to Google's speech recognition.")
             return
         }
-        session = s
+        // Hand over the sound heard while no session was listening, in order, then go live.
+        synchronized(gap) {
+            while (gap.isNotEmpty()) offer(s, gap.removeFirst())
+            session = s
+        }
         leftover.reset()
+        events.onSessionStarted()
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, currentLanguage)
@@ -491,7 +527,8 @@ class GoogleCaptioner(
             events.onProblem("Google's speech recognition keeps stopping on this phone.")
             return
         }
-        main.postDelayed({ if (!stopped && session == null) startSession() }, 100L)
+        // The sound in between is kept (see feed), so restarting quickly loses nothing.
+        main.postDelayed({ if (!stopped && session == null) startSession() }, 50L)
     }
 
     /** Something went wrong; start again with a fresh recogniser, unless it keeps happening. */

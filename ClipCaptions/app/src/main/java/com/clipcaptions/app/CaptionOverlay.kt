@@ -20,8 +20,8 @@ import android.widget.TextView
 
 /**
  * The floating caption box drawn over other apps. Drag it up or down; tap ✕ to stop.
- * Each line shows its translation when there is one, "…" while a translation is on its way,
- * or the words as heard. All methods must be called on the main thread.
+ * Each line shows its translation when there is one, otherwise the words as heard, straight away:
+ * nothing waits for a translation. All methods must be called on the main thread.
  *
  * [onScreenTouched] is called when you touch the screen anywhere outside the box (Android only
  * says that a touch happened, not where), which helps spot swipes to the next video.
@@ -279,15 +279,16 @@ class CaptionOverlay(
         if (!shown) return
         val text = SpannableStringBuilder()
 
+        // Words appear the moment they're heard; their translation replaces them when it's ready.
         lines.forEachIndexed { index, line ->
-            val shownText = line.translated ?: if (line.awaiting) "…" else line.original
+            val shownText = line.translated ?: line.original
             if (text.isNotEmpty()) text.append('\n')
             val isNewest = index == lines.lastIndex && liveOriginal.isEmpty()
             text.appendColored(shownText, if (isNewest) white else olderWhite)
         }
 
         if (liveOriginal.isNotEmpty()) {
-            val liveText = liveTranslated ?: if (liveAwaiting) "…" else liveOriginal
+            val liveText = liveTranslated ?: liveOriginal
             if (text.isNotEmpty()) text.append('\n')
             text.appendColored(liveText, dimWhite)
         }
@@ -296,16 +297,17 @@ class CaptionOverlay(
         mainText.text = text
         mainText.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
 
-        // Under a translation, show the words as heard in small print.
+        // Under a translation, show the words as heard in small print (not while the words
+        // themselves are still showing in the main text).
         val source: String
         val isTranslated: Boolean
         if (liveOriginal.isNotEmpty()) {
             source = liveOriginal
-            isTranslated = liveAwaiting || liveTranslated != null
+            isTranslated = liveTranslated != null
         } else {
             val last = lines.lastOrNull()
             source = last?.original ?: ""
-            isTranslated = last != null && (last.awaiting || last.translated != null)
+            isTranslated = last?.translated != null
         }
         if (isTranslated && source.isNotEmpty()) {
             originalText.text = source
