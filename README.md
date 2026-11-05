@@ -6,9 +6,10 @@ It reads the sound the phone is playing, the same audio that goes to the speaker
 
 There are three ways to caption, all free and all on the phone:
 
-- **Google, word by word** (recommended). Uses the Google speech recognition built into the phone (Android 13 or newer, on phones that include Google's on-device recogniser). It's free, writes the words as they're spoken, and the sound never leaves the phone. Pick the language in the videos; on Android 14 or newer you can also let it switch automatically between the languages downloaded on the phone. Languages marked "download" are downloaded by the phone the first time.
+- **Google, word by word** (recommended). Uses the Google speech recognition built into the phone (Android 13 or newer, on phones that include Google's on-device recogniser). It's free, writes the words as they're spoken, and the sound never leaves the phone. Under **Languages I watch**, tick every language you watch: each one's speech pack and translation pack are downloaded once, straight away, so captions never wait for a download while you scroll. On Android 14 or newer, Google switches between your languages by itself. Swiping to the next video doesn't restart the recogniser (which would cost up to a second): the box clears and the old video's leftover words are dropped, so the new video's words appear as soon as they're spoken.
   - Safety check: if a phone's recogniser can't take app sound, Android has it use the microphone instead. The app checks within a couple of seconds that the recogniser really is reading the video's sound; if not, it stops straight away, shows nothing it heard, and switches to Whisper. "Check this phone again" retries later.
 - **Whisper, any language detected automatically.** Whisper (OpenAI's free, open-source speech model, via whisper.cpp) works out the language of each video by itself, from about 99 languages. Captions appear in short bursts a few seconds after the speech.
+  - **Languages I watch:** tick the languages you watch and their translations download once, straight away, before captions start. A language you didn't tick still works: if you read English, Whisper translates it into English itself straight away while the better translation downloads quietly in the background; otherwise its words show as heard until then.
   - **Accuracy setting:** Fast (31 MB), Better (57 MB) or Best (181 MB). On Automatic, the app times each model once on the phone and uses the most accurate one that keeps captions quick. If captions start falling behind, it steps down to a smaller one by itself.
   - **Speed:** the model loads while Android's sharing question is on screen. Whisper only processes about 15 seconds of its 30-second window (our speech pieces are at most 6 seconds), which roughly halves the work. Speech is sent after about 1.6 seconds instead of waiting longer.
   - **Faster engine on newer phones:** 64-bit phones with ARMv8.2 dot-product instructions (most phones from about 2018 onwards) use a build of Whisper that's roughly twice as fast. Other phones use the standard build.
@@ -17,13 +18,15 @@ There are three ways to caption, all free and all on the phone:
   - A small speech detector skips music and noise, speech is cut into pieces at natural pauses so words aren't split, and phrases Whisper tends to invent over music ("Thanks for watching") are filtered out.
 - **Choose the language yourself.** Vosk writes the words as they're spoken, word by word, for 17 languages (30–90 MB download per language). This is also the fallback on the few phones that can't run automatic detection.
 
-Translation uses Google ML Kit on the phone (about 30 MB per language, downloaded the first time it's needed). After the first downloads, captions work offline.
+Translation uses Google ML Kit on the phone (about 30 MB per language). Every download happens once, before captions start, never while a video is playing. Captions never stop to wait for one, and the languages you watch are loaded into memory before the first video so the first caption is translated at full speed. After the first downloads, captions work offline.
 
 **Swiping to the next video clears the captions** (TikTok, Instagram Reels, YouTube Shorts and similar). The app notices when a different video starts playing, or a video starts straight after you touch the screen. Pausing a video doesn't clear them, so you can stop to read.
 
 Needs Android 10 or newer.
 
 ## Get the app onto your phone
+
+The version number is shown under the app's name on its main screen, so you can check which build is on the phone.
 
 You need to build the APK once. Pick one route.
 
@@ -42,9 +45,9 @@ Shortcut: with the phone plugged in by USB and **USB debugging** turned on (Sett
 1. Create a free GitHub account and a new **private** repository.
 2. Click **uploading an existing file** and drag in everything inside the unzipped `ClipCaptions` folder, including the hidden `.github` folder. Commit.
 3. Open the **Actions** tab. The "Build APK" run starts on its own and takes about 15–20 minutes (most of that is compiling Whisper, twice for 64-bit phones: the standard and the faster build).
-4. Open the finished run and download **ClipCaptions-apk** under Artifacts. Unzip it to get `app-debug.apk`, then install it on the phone as in step 5 above.
+4. On your phone, open the repository's **Releases** page (`github.com/<you>/<repository>/releases/latest`, signed in to GitHub in the phone's browser) and tap **ClipCaptions-5.2.apk** under Assets. Open the downloaded file to install it. No zip, no Google Drive.
 
-If the Actions tab shows nothing, the `.github` folder didn't upload: choose **Add file > Create new file**, name it `.github/workflows/build-apk.yml`, and paste in the contents of that file from this folder.
+The workflow file must be at the top of the repository, in `.github/workflows/`. If the Actions tab shows nothing, choose **Add file > Create new file**, name it `.github/workflows/build-apk.yml`, and paste in the contents of that file from this folder. The workflow finds the app by itself (in a `ClipCaptions` folder or at the top) and always builds the newest copy; the run's log says which version it built. The Releases page keeps the five newest builds.
 
 ### Updating to a new version
 
@@ -56,7 +59,7 @@ This key is only for test builds. Publishing on Google Play needs a separate pri
 
 ## Using it
 
-1. Open Clip Captions. Choose **Google, word by word** (and the language in the videos), **Whisper**, or **Vosk**, and the language you want to read. Leave **Accuracy** on Automatic unless captions lag (choose Fast) or you want to try a bigger model (Better or Best).
+1. Open Clip Captions. Choose **Google, word by word**, **Whisper**, or **Vosk**. For Google or Whisper, tap **Choose languages** and tick every language you watch (they download once, there and then). Choose the language you want to read. Leave **Accuracy** on Automatic unless captions lag (choose Fast) or you want to try a bigger model (Better or Best).
 2. Tap **Start captions**. The first time, allow **Display over other apps** and the sound permission (Android lists it as Microphone; the app doesn't use the microphone), then wait for the download.
 3. Android asks what to share. Choose **A single app** and pick the app you'll watch (for example TikTok). Your notifications stay visible, because Android hides notification content only while the whole screen is shared. Only the sound is used and nothing is saved, but Android shows its screen-sharing indicator while captions are on.
 4. TikTok opens. Play a video. Drag the caption box up or down; tap ✕ (or **Stop** in the notification) to turn captions off.
@@ -65,7 +68,7 @@ This key is only for test builds. Publishing on Google Play needs a separate pri
 
 - **Caption size** (Small, Medium, Large) is in the app, and the caption box remembers where you last dragged it.
 - Clear speech works best. Loud music under the voice, heavy slang and very fast talking reduce accuracy.
-- The first time a new language turns up, its words show untranslated for a few seconds while its translation downloads.
+- A language you didn't tick under **Languages I watch** shows untranslated (or, in Whisper mode with English captions, translated by Whisper) until its translation has downloaded in the background. The caption box's label says "translation downloading" meanwhile.
 - Choosing the language yourself uses a different, word-by-word engine (Vosk): it's faster but less accurate than automatic detection.
 - If the box says no sound is coming through while a video is playing, that app is blocking sound capture on your phone.
 - Google Play Protect may warn that the app is from an unknown developer, because you built it yourself. Choose **Install anyway**.

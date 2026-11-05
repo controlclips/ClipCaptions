@@ -34,7 +34,9 @@ import org.vosk.LibVosk
 import org.vosk.LogLevel
 import org.vosk.Model
 import org.vosk.Recognizer
+import java.util.Collections
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
@@ -44,11 +46,13 @@ import kotlin.math.abs
  * headphones such as AirPods), turns speech into text on the phone, translates it and shows
  * it in the floating caption box. Nothing is recorded or saved.
  *
- * Two modes:
+ * Three modes, all free and on the phone:
+ * - Google: the phone's own Google speech recognition writes the words as they're spoken.
+ *   Falls back to Auto if Google can't run.
  * - Auto: Whisper detects the language of each video (captions a few seconds behind).
- * - Live: Vosk writes the chosen language word by word.
+ * - Live: Vosk writes the chosen language word by word (for phones without Google's recogniser).
  *
- * In both, moving on to another video clears the captions and starts afresh.
+ * In all of them, moving on to another video clears the captions and starts afresh.
  */
 class CaptionService : Service() {
 
@@ -59,6 +63,8 @@ class CaptionService : Service() {
         const val EXTRA_RESULT_DATA = "resultData"
         const val EXTRA_MODE = "mode"
         const val EXTRA_TARGET = "target"
+        // Translation codes of the languages you watch: their translators are warmed up before the first video.
+        const val EXTRA_WATCHED = "watched"
 
         // Live mode
         const val EXTRA_MODEL_PATH = "modelPath"
@@ -67,9 +73,15 @@ class CaptionService : Service() {
         // Auto mode: speech models in order of preference, then the speech detector.
         const val EXTRA_WHISPER_MODELS = "whisperModels"
         const val EXTRA_VAD_PATH = "vadPath"
+        const val EXTRA_AUTOMATIC_SPEED = "automaticSpeed"
+
+        // Google mode: the language to listen for, and (Android 14+) others to switch to automatically.
+        const val EXTRA_GOOGLE_LANGUAGE = "googleLanguage"
+        const val EXTRA_GOOGLE_SWITCH = "googleSwitch"
 
         const val MODE_AUTO = "auto"
         const val MODE_LIVE = "live"
+        const val MODE_GOOGLE = "google"
 
         private const val CHANNEL_ID = "captions"
         private const val NOTIFICATION_ID = 7
@@ -107,7 +119,17 @@ class CaptionService : Service() {
     @Volatile
     private var keepRunning = false
     private var autoMode = false
+    private var googleMode = false
     private var targetCode = "en"
+
+    // Google mode
+    @Volatile
+    private var google: GoogleCaptioner? = null
+    @Volatile
+    private var engineFailed = false
+    private var fallbackRequest: WhisperEngine.Request? = null
+    private var googleLanguage = ""
+    private var liveTranslator: Translator? = null
 
     // Bumped every time you move on to another video; work from an older video is thrown away.
     private val video = AtomicInteger(0)
@@ -124,8 +146,10 @@ class CaptionService : Service() {
     // Auto mode
     private var lastLanguage = ""
     private val translators = HashMap<String, Translator>()
-    private val readyLanguages = HashSet<String>()
-    private val announcedDownloads = HashSet<String>()
+    // Languages whose translation is on the phone. Read by the Whisper thread too.
+    private val readyLanguages: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
+    // Languages whose translation is downloading in the background right now.
+    private val downloading = HashSet<String>()
     private val pendingChunks = ArrayBlockingQueue<Chunk>(1)
     private val droppedChunks = AtomicInteger(0)
 
@@ -152,7 +176,10 @@ class CaptionService : Service() {
 
         val resultCode = command.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         val data = IntentCompat.getParcelableExtra(command, EXTRA_RESULT_DATA, Intent::class.java)
-        val wantsAuto = command.getStringExtra(EXTRA_MODE) == MODE_AUTO
+        val mode = command.getStringExtra(EXTRA_MODE)
+        val wantsAuto = mode == MODE_AUTO
+        val wantsGoogle = mode == MODE_GOOGLE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val googleTag = command.getStringExtra(EXTRA_GOOGLE_LANGUAGE)
         val voskModel = command.getStringExtra(EXTRA_MODEL_PATH)
         val whisperModels = command.getStringArrayExtra(EXTRA_WHISPER_MODELS)?.toList().orEmpty()
 
@@ -164,7 +191,11 @@ class CaptionService : Service() {
             return START_NOT_STICKY
         }
         if (projection != null) return START_NOT_STICKY // Already running.
-        val modelReady = if (wantsAuto) whisperModels.isNotEmpty() else voskModel != null
+        val modelReady = when {
+            wantsGoogle -> !googleTag.isNullOrEmpty()
+            wantsAuto -> whisperModels.isNotEmpty()
+            else -> voskModel != null
+        }
         if (resultCode != Activity.RESULT_OK || data == null || !modelReady) {
             stopSelf()
             return START_NOT_STICKY
@@ -183,17 +214,45 @@ class CaptionService : Service() {
         projection = mp
         isRunning = true
         targetCode = command.getStringExtra(EXTRA_TARGET) ?: "en"
+        loadTranslationPacks()
+        val watched = command.getStringArrayListExtra(EXTRA_WATCHED).orEmpty()
         autoMode = wantsAuto
 
-        if (wantsAuto) {
-            if (!showOverlay(autoStartLabel())) return START_NOT_STICKY
-            val vad = command.getStringExtra(EXTRA_VAD_PATH)
+        if (wantsGoogle && googleTag != null) {
+            googleMode = true
+            googleLanguage = GoogleSpeech.codeOf(googleTag)
+            // On-phone Whisper captions to fall back to, if their files are already on the phone.
+            fallbackRequest = if (whisperModels.isNotEmpty()) {
+                WhisperEngine.Request(
+                    whisperModels,
+                    command.getStringExtra(EXTRA_VAD_PATH),
+                    command.getBooleanExtra(EXTRA_AUTOMATIC_SPEED, true),
+                )
+            } else {
+                null
+            }
+            if (!showOverlay(googleLabel(googleLanguage))) return START_NOT_STICKY
+            overlay?.setStatus("Listening… play a video")
+            val switch = command.getStringArrayListExtra(EXTRA_GOOGLE_SWITCH).orEmpty()
+            val captioner = GoogleCaptioner(this, googleTag, switch, googleEvents)
+            google = captioner
             keepRunning = true
-            whisperThread = Thread({ whisperLoop(whisperModels, vad) }, "caption-whisper").also { it.start() }
+            captioner.start()
+            captureThread = Thread({ captureForGoogle(mp) }, "caption-capture").also { it.start() }
+        } else if (wantsAuto) {
+            if (!showOverlay(autoStartLabel())) return START_NOT_STICKY
+            val request = WhisperEngine.Request(
+                whisperModels,
+                command.getStringExtra(EXTRA_VAD_PATH),
+                command.getBooleanExtra(EXTRA_AUTOMATIC_SPEED, true),
+            )
+            keepRunning = true
+            whisperThread = Thread({ whisperLoop(request) }, "caption-whisper").also { it.start() }
             captureThread = Thread({ captureForWhisper(mp) }, "caption-capture").also { it.start() }
         } else if (voskModel != null) {
             sourceCode = command.getStringExtra(EXTRA_SOURCE) ?: "en"
             translator = createTranslator(sourceCode, targetCode)
+            liveTranslator = translator
             val label = if (translator != null) {
                 "${Languages.nameFor(sourceCode)} → ${Languages.nameFor(targetCode)}".uppercase()
             } else {
@@ -203,6 +262,8 @@ class CaptionService : Service() {
             keepRunning = true
             captureThread = Thread({ captureForVosk(mp, voskModel) }, "caption-capture").also { it.start() }
         }
+
+        warmUpTranslators(watched)
 
         // Watch which media players start, to spot moves to another video.
         val am = getSystemService(AudioManager::class.java)
@@ -228,6 +289,8 @@ class CaptionService : Service() {
             it.stop()
         }
         projection = null
+        google?.stop()
+        google = null
         overlay?.remove()
         overlay = null
         translator?.close()
@@ -324,9 +387,14 @@ class CaptionService : Service() {
 
     private fun onNewVideo() {
         val box = overlay ?: return
+        // Google first, so nothing from the old video's session can arrive after the captions clear.
+        google?.newVideo()
         video.incrementAndGet()
         box.clearCaptions()
-        if (autoMode) {
+        if (googleMode) {
+            liveGeneration++
+            pendingLive = null
+        } else if (autoMode) {
             lastLanguage = ""
             pendingChunks.clear()
             box.setLabel(autoStartLabel())
@@ -390,6 +458,141 @@ class CaptionService : Service() {
         main.post { overlay?.setHint("Captions stopped: $reason") }
     }
 
+    // ---- Google mode: the phone's own speech recognition ----
+
+    private val googleEvents = object : GoogleCaptioner.Events {
+        override fun onPartial(text: String, languageTag: String) {
+            if (googleMode) onGooglePartial(text, GoogleSpeech.codeOf(languageTag))
+        }
+
+        override fun onFinal(text: String, languageTag: String) {
+            if (googleMode) onGoogleFinal(text, GoogleSpeech.codeOf(languageTag))
+        }
+
+        override fun onProblem(message: String) {
+            onEngineProblem(message)
+        }
+    }
+
+    private fun captureForGoogle(mp: MediaProjection) {
+        var record: AudioRecord? = null
+        try {
+            val audio = openPlaybackCapture(mp)
+            record = audio
+            audio.startRecording()
+            val silence = SilenceWatcher()
+            // 0.05 s blocks: the less sound waits here, the sooner Google hears it.
+            val buffer = ByteArray(1600)
+
+            // No pause after a swipe: the old video's leftover words are dropped by the recogniser
+            // side instead, so the new video's first words aren't cut off.
+            while (keepRunning && !engineFailed) {
+                val read = audio.read(buffer, 0, buffer.size)
+                if (read < 0) error("sound capture stopped (code $read)")
+                if (read == 0) continue
+                silence.onAudio(peakLevel(buffer, read) > SOUND_LEVEL)
+                google?.feed(buffer, read)
+            }
+        } catch (e: Exception) {
+            reportStop(e)
+        } finally {
+            try {
+                record?.stop()
+            } catch (ignored: Exception) {
+            }
+            record?.release()
+            if (engineFailed) main.post { startOnPhoneFallback() }
+        }
+    }
+
+    private fun onGooglePartial(text: String, language: String) {
+        val box = overlay ?: return
+        updateGoogleLabel(language)
+        if (language == targetCode) {
+            box.setLive(text, false)
+            return
+        }
+        val tr = translatorFor(language)
+        if (tr == null || language !in readyLanguages) {
+            // No translator for this language, or its translation is still downloading in the background:
+            // show the words as heard rather than wait.
+            box.setLive(text, false)
+            if (tr != null) prepareTranslation(language, tr)
+            return
+        }
+        box.setLive(text, true)
+        pendingLive = text
+        liveTranslator = tr
+        translateLive(tr)
+    }
+
+    private fun onGoogleFinal(text: String, language: String) {
+        val box = overlay ?: return
+        updateGoogleLabel(language)
+        liveGeneration++
+        pendingLive = null
+        showLine(box, text, language)
+    }
+
+    private fun updateGoogleLabel(language: String) {
+        if (language.isNotEmpty() && language != googleLanguage) {
+            googleLanguage = language
+            overlay?.setLabel(googleLabel(language))
+        }
+    }
+
+    private fun googleLabel(language: String): String = captionLabel(language, "google")
+
+    /** "SPANISH → ENGLISH · GOOGLE", noting when that translation is still downloading. */
+    private fun captionLabel(language: String, engine: String): String {
+        val heard = Languages.nameFor(language)
+        val label = when {
+            language == targetCode -> "$heard · $engine"
+            language in downloading -> "$heard → ${Languages.nameFor(targetCode)} · translation downloading"
+            else -> "$heard → ${Languages.nameFor(targetCode)} · $engine"
+        }
+        return label.uppercase()
+    }
+
+    /** Main thread: updates the box's label after a translation starts or finishes downloading. */
+    private fun refreshLabel() {
+        val box = overlay ?: return
+        when {
+            googleMode && googleLanguage.isNotEmpty() -> box.setLabel(googleLabel(googleLanguage))
+            autoMode && lastLanguage.isNotEmpty() -> box.setLabel(autoLabel(lastLanguage))
+        }
+    }
+
+    /** Main thread: the on-phone Google engine can't continue, so switch to Whisper if it's available. */
+    private fun onEngineProblem(message: String) {
+        if (engineFailed) return
+        engineFailed = true
+        google?.stop()
+        google = null
+        val box = overlay ?: return
+        if (fallbackRequest != null && WhisperLib.available) {
+            box.flashHint("$message Using Whisper on this phone instead.")
+        } else {
+            box.setHint("$message Choose another option in Clip Captions.")
+        }
+    }
+
+    /** Main thread, after the Google engine's sound capture has stopped. */
+    private fun startOnPhoneFallback() {
+        val request = fallbackRequest ?: return
+        val mp = projection ?: return
+        if (!keepRunning || !WhisperLib.available) return
+        googleMode = false
+        autoMode = true
+        overlay?.let {
+            it.clearCaptions()
+            it.setLabel(autoStartLabel())
+            it.setStatus("Loading the speech model…")
+        }
+        whisperThread = Thread({ whisperLoop(request) }, "caption-whisper").also { it.start() }
+        captureThread = Thread({ captureForWhisper(mp) }, "caption-capture").also { it.start() }
+    }
+
     // ---- Auto mode: Whisper ----
 
     private fun captureForWhisper(mp: MediaProjection) {
@@ -449,16 +652,10 @@ class CaptionService : Service() {
         }
     }
 
-    private fun whisperLoop(modelPaths: List<String>, vadPath: String?) {
-        // Start with the first model that loads; smaller ones later in the list are the step-downs.
-        var level = 0
-        var handle = 0L
-        while (level < modelPaths.size) {
-            handle = WhisperLib.nativeInit(modelPaths[level])
-            if (handle != 0L) break
-            level++
-        }
-        if (handle == 0L) {
+    private fun whisperLoop(request: WhisperEngine.Request) {
+        // Usually already loaded while Android's screen-share question was on screen.
+        val session = WhisperEngine.take(this, request)
+        if (session == null) {
             main.post {
                 overlay?.setHint(
                     "Auto-detect couldn't start on this phone. Open Clip Captions and choose the language yourself instead.",
@@ -466,8 +663,10 @@ class CaptionService : Service() {
             }
             return
         }
-        // Without the speech detector Whisper still works; it just also runs on music-only chunks.
-        val vad = if (vadPath != null) WhisperLib.nativeInitVad(vadPath) else 0L
+        if (!keepRunning) {
+            session.close()
+            return
+        }
         main.post { overlay?.setStatus("Listening… play a video") }
 
         val threads = DeviceProfile.threads()
@@ -486,54 +685,56 @@ class CaptionService : Service() {
                 }
 
                 val started = SystemClock.elapsedRealtime()
-                if (vad != 0L && !WhisperLib.nativeHasSpeech(vad, chunk.samples)) {
+                if (session.vad != 0L && !WhisperLib.nativeHasSpeech(session.vad, chunk.samples)) {
                     slowScore = (slowScore - 1).coerceAtLeast(0)
                     continue
                 }
 
-                // Once a video's language is settled, Whisper is told it rather than guessing every chunk.
+                // Once a video's language is settled, Whisper is told it rather than detecting it every chunk.
                 val language = languageLock.locked
                 // Whisper writes the words in their own language and ML Kit translates them, which is more
-                // accurate with these model sizes. Whisper only translates languages ML Kit can't.
+                // accurate with these model sizes. Whisper translates into English itself for languages ML Kit
+                // can't translate, and for ones whose translation is still downloading, so nothing waits for it.
                 val whisperTranslates = language != null && targetCode == "en" && language != "en" &&
-                    TranslateLanguage.fromLanguageTag(language) == null
-                val bytes = WhisperLib.nativeTranscribe(handle, chunk.samples, threads, whisperTranslates, language ?: "auto")
+                    (TranslateLanguage.fromLanguageTag(language) == null || language !in readyLanguages)
+                val bytes = WhisperLib.nativeTranscribe(
+                    session.handle,
+                    chunk.samples,
+                    threads,
+                    whisperTranslates,
+                    language ?: "auto",
+                    WhisperEngine.AUDIO_CONTEXT,
+                )
                 val elapsed = SystemClock.elapsedRealtime() - started
                 if (!keepRunning) break
 
-                val heard = WhisperLib.nativeLanguage(handle)
+                val heard = WhisperLib.nativeLanguage(session.handle)
+                val confidence = WhisperLib.nativeLanguageConfidence()
                 val text = if (bytes == null) "" else WhisperText.clean(String(bytes, Charsets.UTF_8))
-                if (text.isNotEmpty()) languageLock.record(heard)
+                if (text.isNotEmpty()) languageLock.record(heard, confidence)
                 if (text.isNotEmpty() && text != previousText) {
                     previousText = text
                     val result = WhisperResult(text, heard, whisperTranslates, chunk.video)
                     main.post { onAutoText(result) }
                 }
 
-                // If this phone can't keep up, step down to a smaller model.
+                // If captions are lagging, step down to a smaller, faster model.
                 val audioMs = chunk.samples.size * 1000L / SAMPLE_RATE
                 val dropped = droppedChunks.getAndSet(0)
                 slowScore = when {
                     dropped > 0 -> slowScore + 2
-                    elapsed > audioMs * 85 / 100 -> slowScore + 1
+                    elapsed > audioMs * 65 / 100 -> slowScore + 1
                     else -> (slowScore - 1).coerceAtLeast(0)
                 }
-                if (slowScore >= 4 && level + 1 < modelPaths.size) {
-                    val smaller = WhisperLib.nativeInit(modelPaths[level + 1])
-                    if (smaller != 0L) {
-                        WhisperLib.nativeFree(handle)
-                        handle = smaller
-                        level++
-                        slowScore = 0
-                        main.post { overlay?.flashHint("Switched to a faster speech model so captions keep up.") }
-                    }
+                if (slowScore >= 4 && session.stepDown()) {
+                    slowScore = 0
+                    main.post { overlay?.flashHint("Switched to a faster speech model so captions keep up.") }
                 }
             }
         } catch (e: Exception) {
             reportStop(e)
         } finally {
-            WhisperLib.nativeFree(handle)
-            if (vad != 0L) WhisperLib.nativeFreeVad(vad)
+            session.close()
         }
     }
 
@@ -548,7 +749,21 @@ class CaptionService : Service() {
         }
 
         val text = result.text
-        if (result.translatedByWhisper || language.isEmpty() || language == targetCode) {
+        if (result.translatedByWhisper || language.isEmpty()) {
+            box.addLine(text, false)
+            // Whisper stood in because this language's translation isn't on the phone: fetch it quietly.
+            if (result.translatedByWhisper) translatorFor(language)?.let { prepareTranslation(language, it) }
+            return
+        }
+        showLine(box, text, language)
+    }
+
+    /**
+     * Shows a finished sentence heard in [language], translated into the caption language when
+     * needed (Google and Auto modes).
+     */
+    private fun showLine(box: CaptionOverlay, text: String, language: String) {
+        if (language == targetCode) {
             box.addLine(text, false)
             return
         }
@@ -565,17 +780,73 @@ class CaptionService : Service() {
                 .addOnFailureListener { overlay?.setTranslation(id, text) }
             return
         }
-        // First time this language turns up: show the words as heard until its translation has downloaded.
-        val id = box.addLine(text, false)
-        if (announcedDownloads.add(language)) {
-            box.flashHint("Getting ${Languages.nameFor(language)} translation ready (first time only)…")
-        }
+        // A language you didn't tick, heard for the first time: show the words as heard straight away,
+        // and fetch its translation in the background. Nothing waits for the download.
+        box.addLine(text, false)
+        prepareTranslation(language, tr)
+    }
+
+    /**
+     * Downloads a language's translation in the background, once. Captions carry on meanwhile; the
+     * box's label says it's on its way, rather than a message covering the words.
+     */
+    private fun prepareTranslation(language: String, tr: Translator) {
+        if (language in readyLanguages || !downloading.add(language)) return
+        refreshLabel()
         tr.downloadModelIfNeeded()
-            .onSuccessTask { tr.translate(text) }
-            .addOnSuccessListener { translated ->
-                readyLanguages.add(language)
-                overlay?.setTranslation(id, translated)
+            .addOnSuccessListener {
+                downloading.remove(language)
+                markTranslationReady(language)
+                warmUp(tr)
+                refreshLabel()
             }
+            .addOnFailureListener {
+                // No connection, say: try again the next time this language is heard.
+                downloading.remove(language)
+                refreshLabel()
+            }
+    }
+
+    /**
+     * The first translation after starting is slow while the phone loads the language into memory.
+     * Doing that now, for the languages you watch, means the first caption is translated at full speed.
+     */
+    private fun warmUpTranslators(watched: List<String>) {
+        if (!googleMode && !autoMode) {
+            translator?.let { if (sourceCode in readyLanguages || sourceCode == "en") warmUp(it) }
+            return
+        }
+        for (language in watched.distinct()) {
+            if (language == targetCode || language !in readyLanguages) continue
+            translatorFor(language)?.let { warmUp(it) }
+        }
+    }
+
+    private fun warmUp(tr: Translator) {
+        tr.translate("Hello").addOnFailureListener { }
+    }
+
+    /**
+     * Translation packs already on the phone are ready straight away, so captions don't wait or
+     * say "first time only" on every start. The list is remembered, then checked with ML Kit.
+     */
+    private fun loadTranslationPacks() {
+        addReadyPacks(TranslationPacks.known(this))
+        TranslationPacks.refresh(this) { codes -> addReadyPacks(codes) }
+    }
+
+    private fun addReadyPacks(codes: Set<String>) {
+        // A language is ready when both its pack and the caption language's pack are on the phone.
+        // English is built in.
+        if (targetCode == "en" || targetCode in codes) {
+            readyLanguages.addAll(codes)
+            readyLanguages.add("en")
+        }
+    }
+
+    private fun markTranslationReady(language: String) {
+        readyLanguages.add(language)
+        TranslationPacks.remember(this, listOf(language, targetCode))
     }
 
     private fun translatorFor(language: String): Translator? {
@@ -587,11 +858,7 @@ class CaptionService : Service() {
 
     private fun autoStartLabel() = "AUTO-DETECT → ${Languages.nameFor(targetCode).uppercase()}"
 
-    private fun autoLabel(language: String): String {
-        val heard = Languages.nameFor(language)
-        val label = if (language == targetCode) "$heard · auto" else "$heard → ${Languages.nameFor(targetCode)} · auto"
-        return label.uppercase()
-    }
+    private fun autoLabel(language: String): String = captionLabel(language, "auto")
 
     // ---- Live mode: Vosk ----
 
@@ -727,7 +994,7 @@ class CaptionService : Service() {
             if (generation == liveGeneration && task.isSuccessful) {
                 overlay?.setLiveTranslation(task.result)
             }
-            if (translator === tr) translateLive(tr)
+            if (liveTranslator === tr) translateLive(tr)
         }
     }
 

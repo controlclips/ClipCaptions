@@ -35,6 +35,7 @@ object WhisperLib {
     /**
      * Turns 16 kHz mono audio (-1..1) into text, or into English text when [translate] is true.
      * [language] is a code such as "es" when the language is known, or "auto" to detect it.
+     * [audioContext] is how much of Whisper's 30-second window to process (1500 = all).
      * Returns UTF-8 bytes (empty if no speech was found) or null on failure.
      */
     @JvmStatic
@@ -44,11 +45,16 @@ object WhisperLib {
         threads: Int,
         translate: Boolean,
         language: String,
+        audioContext: Int,
     ): ByteArray?
 
     /** The language of the last chunk, such as "es", or "" if unknown. */
     @JvmStatic
     external fun nativeLanguage(handle: Long): String
+
+    /** How sure Whisper was (0–1) of the language it detected in the last chunk, or -1 if it didn't detect one. */
+    @JvmStatic
+    external fun nativeLanguageConfidence(): Float
 
     /** Loads the speech detector. Returns 0 if it couldn't be loaded. */
     @JvmStatic

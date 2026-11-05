@@ -12,8 +12,8 @@ android {
         // Android 10 is the first version that lets an app capture other apps' sound.
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "3.0"
+        versionCode = 8
+        versionName = "5.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -35,7 +35,24 @@ android {
         }
     }
 
+    // Every build is signed with the same key (keystore/debug.keystore). Without this, each GitHub
+    // build machine makes its own random key, and Android refuses to install a new version over the
+    // old one ("App not installed") because the signatures don't match.
+    // This key is for testing builds only. Apps published on Google Play need a separate private key.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storeType = "pkcs12"
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
         }
