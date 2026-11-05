@@ -68,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var startButton: Button
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
+    private lateinit var speedText: TextView
 
     private val io = Executors.newSingleThreadExecutor()
     private var busy = false
@@ -134,6 +135,7 @@ class MainActivity : AppCompatActivity() {
         startButton = findViewById(R.id.startButton)
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
+        speedText = findViewById(R.id.speedText)
 
         sourceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, Languages.spoken.map { it.name })
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
@@ -212,6 +214,30 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         refreshUi()
         if (!busy) setStatus(if (CaptionService.isRunning) runningMessage() else describeChoice())
+        showSpeed()
+    }
+
+    /** How quick captions were last time, measured on this phone, so delays can be pinned down. */
+    private fun showSpeed() {
+        val prefs = getSharedPreferences(CaptionService.SPEED_PREFS, MODE_PRIVATE)
+        val words = prefs.getLong("words_ms", -1L)
+        if (CaptionService.isRunning || words < 0) {
+            speedText.visibility = View.GONE
+            return
+        }
+        val engine = when (prefs.getString("mode", null)) {
+            CaptionService.MODE_GOOGLE -> "Google"
+            CaptionService.MODE_AUTO -> "Whisper"
+            else -> "Vosk"
+        }
+        val translation = prefs.getLong("translation_ms", -1L)
+        val samples = prefs.getInt("samples", 0)
+        fun seconds(ms: Long) = String.format(java.util.Locale.UK, "%.1f s", ms / 1000.0)
+        val text = StringBuilder("Speed last time ($engine, $samples measurements): words appeared about ${seconds(words)} after people spoke")
+        if (translation >= 0) text.append(", and the translation about ${seconds(translation)} after the words")
+        text.append('.')
+        speedText.text = text
+        speedText.visibility = View.VISIBLE
     }
 
     override fun onDestroy() {

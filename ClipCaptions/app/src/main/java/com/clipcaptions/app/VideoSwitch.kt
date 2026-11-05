@@ -262,3 +262,128 @@ class LeftoverWords {
 
     private fun words(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
 }
+
+/**
+ * Breaks a long sentence that's still being spoken into short caption lines. People on TikTok
+ * often talk without pausing, and re-translating an ever-growing paragraph gets slower and slower.
+ * Short lines are each translated once, quickly. The last few words stay "live", because the
+ * recogniser may still change them. Counts words, or characters for languages written without spaces.
+ * Contains no Android code so it can be tested on its own.
+ */
+class LineSplitter(
+    private val lineWords: Int = 10,
+    private val liveWords: Int = 3,
+    private val lineChars: Int = 16,
+    private val liveChars: Int = 5,
+) {
+    /** Lines that are finished now, and the words still being spoken. */
+    class Split(val finished: List<String>, val live: String)
+
+    private var doneWords = 0
+    private var doneChars = 0
+
+    fun reset() {
+        doneWords = 0
+        doneChars = 0
+    }
+
+    /** Words still being spoken (the recogniser's whole guess for the sentence so far). */
+    fun onPartial(text: String): Split {
+        val t = text.trim()
+        if (t.isEmpty()) return Split(emptyList(), "")
+        return if (t.contains(' ')) splitWords(t) else splitChars(t)
+    }
+
+    /** The sentence is finished: returns the part not already shown as a line. The next one starts clean. */
+    fun onFinal(text: String): String {
+        val t = text.trim()
+        val rest = when {
+            t.isEmpty() -> ""
+            t.contains(' ') -> words(t).drop(doneWords).joinToString(" ")
+            else -> if (doneChars >= t.length) "" else t.substring(doneChars).trim()
+        }
+        reset()
+        return rest
+    }
+
+    private fun splitWords(t: String): Split {
+        val all = words(t)
+        // Shorter than what's already been shown: the recogniser started a new sentence without
+        // saying the last one had finished. Start again rather than hide the new words.
+        if (doneWords > all.size) doneWords = 0
+        val finished = ArrayList<String>()
+        while (all.size - doneWords >= lineWords + liveWords) {
+            var end = doneWords + lineWords // exclusive
+            // Prefer to end the line after punctuation, if there's some near the end of it.
+            for (i in end - 1 downTo doneWords + lineWords / 2) {
+                if (all[i].last() in breakAfter) {
+                    end = i + 1
+                    break
+                }
+            }
+            finished += all.subList(doneWords, end).joinToString(" ")
+            doneWords = end
+        }
+        return Split(finished, all.drop(doneWords).joinToString(" "))
+    }
+
+    private fun splitChars(t: String): Split {
+        if (doneChars > t.length) doneChars = 0
+        val finished = ArrayList<String>()
+        while (t.length - doneChars >= lineChars + liveChars) {
+            var end = doneChars + lineChars
+            for (i in end - 1 downTo doneChars + lineChars / 2) {
+                if (t[i] in breakAfter) {
+                    end = i + 1
+                    break
+                }
+            }
+            finished += t.substring(doneChars, end)
+            doneChars = end
+        }
+        return Split(finished, t.substring(doneChars))
+    }
+
+    private fun words(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
+
+    private companion object {
+        val breakAfter = setOf('.', ',', '!', '?', ';', ':', '。', '，', '！', '？', '、', '；')
+    }
+}
+
+/**
+ * Typical delays during a captions session, in milliseconds: from people starting to speak to their
+ * words appearing, and from words appearing to their translation. Shown in the app afterwards, so a
+ * slow phone can be told apart from a slow step. Contains no Android code so it can be tested on its own.
+ */
+class SpeedStats(private val keep: Int = 200) {
+    private val words = ArrayList<Long>()
+    private val translations = ArrayList<Long>()
+
+    @Synchronized
+    fun addWords(ms: Long) = add(words, ms)
+
+    @Synchronized
+    fun addTranslation(ms: Long) = add(translations, ms)
+
+    @Synchronized
+    fun wordsMedian(): Long? = median(words)
+
+    @Synchronized
+    fun translationMedian(): Long? = median(translations)
+
+    @Synchronized
+    fun samples(): Int = words.size
+
+    private fun add(list: ArrayList<Long>, ms: Long) {
+        if (ms < 0 || ms > 10_000) return // Not a real measurement.
+        list.add(ms)
+        if (list.size > keep) list.removeAt(0)
+    }
+
+    private fun median(list: List<Long>): Long? {
+        if (list.isEmpty()) return null
+        val sorted = list.sorted()
+        return sorted[sorted.size / 2]
+    }
+}

@@ -102,6 +102,9 @@ class CaptionService : Service() {
 
         @Volatile
         var isRunning = false
+
+        // Where the last session's speed readout is kept for the app's main screen.
+        const val SPEED_PREFS = "speed"
     }
 
     /** A piece of speech for Whisper, tagged with the video it came from. */
@@ -130,6 +133,21 @@ class CaptionService : Service() {
     private var fallbackRequest: WhisperEngine.Request? = null
     private var googleLanguage = ""
     private var liveTranslator: Translator? = null
+    // Long sentences are shown as short lines, each translated once (see LineSplitter).
+    private val splitter = LineSplitter()
+    private var liveText = ""
+    private var liveLanguage = ""
+    // The live translation on screen, and the words it's for, so a finished sentence can reuse it.
+    private var liveTranslatedFrom = ""
+    private var liveTranslation: String? = null
+    private var pendingLiveAt = 0L
+
+    // Speed readout: when people started speaking (set by the capture thread), and the delays seen.
+    private val speed = SpeedStats()
+    @Volatile
+    private var speechStartedAt = 0L
+    @Volatile
+    private var timeNextSpeech = true
 
     // Bumped every time you move on to another video; work from an older video is thrown away.
     private val video = AtomicInteger(0)
@@ -275,6 +293,7 @@ class CaptionService : Service() {
     override fun onDestroy() {
         keepRunning = false
         isRunning = false
+        saveSpeed()
         audioManager?.unregisterAudioPlaybackCallback(playbackCallback)
         audioManager = null
         try {
@@ -391,9 +410,15 @@ class CaptionService : Service() {
         google?.newVideo()
         video.incrementAndGet()
         box.clearCaptions()
+        // Time how long the new video's first words take to appear.
+        speechStartedAt = 0L
+        timeNextSpeech = true
         if (googleMode) {
             liveGeneration++
             pendingLive = null
+            splitter.reset()
+            liveText = ""
+            forgetLiveTranslation()
         } else if (autoMode) {
             lastLanguage = ""
             pendingChunks.clear()
@@ -472,6 +497,10 @@ class CaptionService : Service() {
         override fun onProblem(message: String) {
             onEngineProblem(message)
         }
+
+        override fun onSessionStarted() {
+            if (googleMode) onGoogleSessionStarted()
+        }
     }
 
     private fun captureForGoogle(mp: MediaProjection) {
@@ -484,14 +513,29 @@ class CaptionService : Service() {
             // 0.05 s blocks: the less sound waits here, the sooner Google hears it.
             val buffer = ByteArray(1600)
 
+            var quietMs = 1000L
+
             // No pause after a swipe: the old video's leftover words are dropped by the recogniser
             // side instead, so the new video's first words aren't cut off.
             while (keepRunning && !engineFailed) {
                 val read = audio.read(buffer, 0, buffer.size)
                 if (read < 0) error("sound capture stopped (code $read)")
                 if (read == 0) continue
-                silence.onAudio(peakLevel(buffer, read) > SOUND_LEVEL)
+                val loud = peakLevel(buffer, read) > SOUND_LEVEL
+                silence.onAudio(loud)
                 google?.feed(buffer, read)
+
+                // For the speed readout: sound starting after a pause (or after a swipe) is when
+                // people start speaking; the clock stops when their first words appear.
+                if (loud) {
+                    if ((quietMs >= 600 || timeNextSpeech) && speechStartedAt == 0L) {
+                        speechStartedAt = SystemClock.elapsedRealtime()
+                        timeNextSpeech = false
+                    }
+                    quietMs = 0
+                } else {
+                    quietMs += read * 1000L / (SAMPLE_RATE * 2)
+                }
             }
         } catch (e: Exception) {
             reportStop(e)
@@ -507,8 +551,25 @@ class CaptionService : Service() {
 
     private fun onGooglePartial(text: String, language: String) {
         val box = overlay ?: return
+        noteWordsAppeared()
         updateGoogleLabel(language)
-        if (language == targetCode) {
+        val split = splitter.onPartial(text)
+        if (split.finished.isNotEmpty()) {
+            // Someone's talking without pausing: the start of the sentence becomes its own line,
+            // translated once, so translating doesn't get slower as the sentence grows.
+            liveGeneration++
+            pendingLive = null
+            forgetLiveTranslation()
+            for (line in split.finished) showLine(box, line, language)
+        }
+        showGoogleLive(box, split.live, language)
+    }
+
+    /** The words still being spoken, translated as they come in. */
+    private fun showGoogleLive(box: CaptionOverlay, text: String, language: String) {
+        liveText = text
+        liveLanguage = language
+        if (text.isEmpty() || language == targetCode) {
             box.setLive(text, false)
             return
         }
@@ -522,16 +583,72 @@ class CaptionService : Service() {
         }
         box.setLive(text, true)
         pendingLive = text
+        pendingLiveAt = SystemClock.elapsedRealtime()
         liveTranslator = tr
         translateLive(tr)
     }
 
     private fun onGoogleFinal(text: String, language: String) {
         val box = overlay ?: return
+        noteWordsAppeared()
         updateGoogleLabel(language)
+        finishGoogleSentence(box, splitter.onFinal(text), language)
+    }
+
+    /**
+     * Shows the end of a sentence as a line. If the live translation on screen is for the same words,
+     * it's used as it is; otherwise it stays up until the new translation is ready, so there's no gap.
+     */
+    private fun finishGoogleSentence(box: CaptionOverlay, rest: String, language: String) {
+        val shown = liveTranslation
+        val exact = if (shown != null && sameWords(rest, liveTranslatedFrom)) shown else null
         liveGeneration++
         pendingLive = null
-        showLine(box, text, language)
+        liveText = ""
+        forgetLiveTranslation()
+        if (rest.isEmpty()) {
+            box.setLive("", false)
+            return
+        }
+        showLine(box, rest, language, exact, shown)
+    }
+
+    /** Google began a new session. If the last one stopped mid-sentence, keep what was on screen. */
+    private fun onGoogleSessionStarted() {
+        val box = overlay
+        val unfinished = liveText
+        splitter.reset()
+        if (box != null && unfinished.isNotEmpty()) finishGoogleSentence(box, unfinished, liveLanguage)
+    }
+
+    private fun forgetLiveTranslation() {
+        liveTranslatedFrom = ""
+        liveTranslation = null
+    }
+
+    /** The same words, ignoring capitals and punctuation (a finished sentence usually adds both). */
+    private fun sameWords(a: String, b: String): Boolean {
+        fun plain(t: String) = t.lowercase().replace(Regex("[\\p{P}\\p{S}]"), "").split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return plain(a) == plain(b)
+    }
+
+    /** Speed readout: words have appeared, so stop the clock started when people began speaking. */
+    private fun noteWordsAppeared() {
+        val started = speechStartedAt
+        if (started == 0L) return
+        speechStartedAt = 0L
+        speed.addWords(SystemClock.elapsedRealtime() - started)
+    }
+
+    /** Keeps this session's typical delays for the app's main screen. */
+    private fun saveSpeed() {
+        val words = speed.wordsMedian() ?: return
+        getSharedPreferences(SPEED_PREFS, MODE_PRIVATE).edit()
+            .putString("mode", if (googleMode) MODE_GOOGLE else if (autoMode) MODE_AUTO else MODE_LIVE)
+            .putLong("words_ms", words)
+            .putLong("translation_ms", speed.translationMedian() ?: -1L)
+            .putInt("samples", speed.samples())
+            .apply()
     }
 
     private fun updateGoogleLabel(language: String) {
@@ -762,7 +879,13 @@ class CaptionService : Service() {
      * Shows a finished sentence heard in [language], translated into the caption language when
      * needed (Google and Auto modes).
      */
-    private fun showLine(box: CaptionOverlay, text: String, language: String) {
+    private fun showLine(
+        box: CaptionOverlay,
+        text: String,
+        language: String,
+        exact: String? = null,
+        provisional: String? = null,
+    ) {
         if (language == targetCode) {
             box.addLine(text, false)
             return
@@ -775,9 +898,19 @@ class CaptionService : Service() {
         }
         if (language in readyLanguages) {
             val id = box.addLine(text, true)
+            if (exact != null) {
+                // Already translated while it was being spoken.
+                box.setTranslation(id, exact)
+                return
+            }
+            if (provisional != null) box.setTranslation(id, provisional)
+            val askedAt = SystemClock.elapsedRealtime()
             tr.translate(text)
-                .addOnSuccessListener { translated -> overlay?.setTranslation(id, translated) }
-                .addOnFailureListener { overlay?.setTranslation(id, text) }
+                .addOnSuccessListener { translated ->
+                    if (provisional == null) speed.addTranslation(SystemClock.elapsedRealtime() - askedAt)
+                    overlay?.setTranslation(id, translated)
+                }
+                .addOnFailureListener { if (provisional == null) overlay?.setTranslation(id, text) }
             return
         }
         // A language you didn't tick, heard for the first time: show the words as heard straight away,
@@ -989,9 +1122,13 @@ class CaptionService : Service() {
         pendingLive = null
         liveInFlight = true
         val generation = liveGeneration
+        val askedAt = pendingLiveAt
         tr.translate(text).addOnCompleteListener { task ->
             liveInFlight = false
             if (generation == liveGeneration && task.isSuccessful) {
+                liveTranslatedFrom = text
+                liveTranslation = task.result
+                if (askedAt != 0L) speed.addTranslation(SystemClock.elapsedRealtime() - askedAt)
                 overlay?.setLiveTranslation(task.result)
             }
             if (liveTranslator === tr) translateLive(tr)
