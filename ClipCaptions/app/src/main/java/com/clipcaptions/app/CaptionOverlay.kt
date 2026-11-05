@@ -25,6 +25,8 @@ import android.widget.TextView
  *
  * [onScreenTouched] is called when you touch the screen anywhere outside the box (Android only
  * says that a touch happened, not where), which helps spot swipes to the next video.
+ *
+ * The box remembers where you last dragged it, and uses the caption size chosen in the app.
  */
 class CaptionOverlay(
     private val context: Context,
@@ -47,6 +49,8 @@ class CaptionOverlay(
 
     // After a swipe to another video the box shrinks to its header until new words arrive.
     private var cleared = false
+
+    private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     private lateinit var root: FrameLayout
     private lateinit var labelView: TextView
@@ -102,15 +106,16 @@ class CaptionOverlay(
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT),
         )
 
+        val (mainSize, originalSize) = CaptionSize.fromKey(prefs.getString("caption_size", null)).sp
         mainText = TextView(context).apply {
             setTextColor(white)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, mainSize)
             setLineSpacing(0f, 1.12f)
             setPadding(0, 0, dp(6f), 0)
         }
         originalText = TextView(context).apply {
             setTextColor(dimWhite)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, originalSize)
             setPadding(0, dp(6f), dp(6f), 0)
             visibility = View.GONE
         }
@@ -143,7 +148,8 @@ class CaptionOverlay(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            y = (context.resources.displayMetrics.heightPixels * 0.16f).toInt()
+            val screen = context.resources.displayMetrics.heightPixels
+            y = prefs.getInt("box_y", (screen * 0.16f).toInt()).coerceIn(0, (screen * 0.85f).toInt())
         }
 
         // Drag the box up and down. Touches outside it go straight to the app underneath.
@@ -160,6 +166,9 @@ class CaptionOverlay(
                     val maxY = (context.resources.displayMetrics.heightPixels - root.height).coerceAtLeast(0)
                     params.y = (downY + (event.rawY - downRawY)).toInt().coerceIn(0, maxY)
                     windowManager.updateViewLayout(root, params)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (params.y != downY) prefs.edit().putInt("box_y", params.y).apply()
                 }
             }
             true
@@ -310,5 +319,17 @@ class CaptionOverlay(
         val start = length
         append(value)
         setSpan(ForegroundColorSpan(color), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+}
+
+/** The caption size setting: main text and small original text, in sp. */
+enum class CaptionSize(val key: String, val label: String, val sp: Pair<Float, Float>) {
+    SMALL("small", "Small", 16f to 12f),
+    MEDIUM("medium", "Medium", 20f to 14f),
+    LARGE("large", "Large", 25f to 17f),
+    ;
+
+    companion object {
+        fun fromKey(key: String?) = entries.firstOrNull { it.key == key } ?: MEDIUM
     }
 }

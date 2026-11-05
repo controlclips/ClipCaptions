@@ -36,12 +36,21 @@ class MainActivity : AppCompatActivity() {
     /** Everything the caption service needs once Android has agreed to share the sound. */
     private data class Launch(
         val auto: Boolean,
+        val google: Boolean = false,
+        val googleLanguage: String? = null,
+        val googleSwitch: List<String> = emptyList(),
+        // Languages you watch (translation codes), so their translators can be warmed up before the first video.
+        val watched: List<String> = emptyList(),
         val voskModel: String? = null,
         val whisperModels: List<String> = emptyList(),
         val vadModel: String? = null,
-    )
+        val automaticSpeed: Boolean = true,
+    ) {
+        fun whisperRequest() = WhisperEngine.Request(whisperModels, vadModel, automaticSpeed)
+    }
 
     private lateinit var modeGroup: RadioGroup
+    private lateinit var modeGoogle: RadioButton
     private lateinit var modeAuto: RadioButton
     private lateinit var modeLive: RadioButton
     private lateinit var autoUnavailable: TextView
@@ -49,6 +58,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var targetSpinner: Spinner
     private lateinit var speedSection: View
     private lateinit var speedSpinner: Spinner
+    private lateinit var googleStatus: TextView
+    private lateinit var googleRecheck: Button
+    private lateinit var watchSection: View
+    private lateinit var watchLanguages: TextView
+    private lateinit var watchChoose: Button
+    private lateinit var watchNote: TextView
+    private lateinit var sizeSpinner: Spinner
     private lateinit var startButton: Button
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
@@ -56,10 +72,15 @@ class MainActivity : AppCompatActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private var busy = false
     private var pendingLaunch: Launch? = null
+    private var googleSupport: GoogleSpeech.Support? = null
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (hasAudioPermission()) {
-            if (isAutoMode()) prepareAuto() else prepareSpeechModel()
+            when {
+                isGoogleMode() -> prepareGoogle()
+                isAutoMode() -> prepareAuto()
+                else -> prepareSpeechModel()
+            }
         } else {
             fail(
                 "Clip Captions needs the Microphone permission. Android uses that permission for capturing " +
@@ -72,6 +93,7 @@ class MainActivity : AppCompatActivity() {
         val data = result.data
         val launch = pendingLaunch
         if (result.resultCode != Activity.RESULT_OK || data == null || launch == null) {
+            if (launch?.auto == true) WhisperEngine.discardPreload()
             fail("Captions didn't start because the sharing request was cancelled. Tap Start captions to try again.")
             return@registerForActivityResult
         }
@@ -92,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         modeGroup = findViewById(R.id.modeGroup)
+        modeGoogle = findViewById(R.id.modeGoogle)
         modeAuto = findViewById(R.id.modeAuto)
         modeLive = findViewById(R.id.modeLive)
         autoUnavailable = findViewById(R.id.autoUnavailable)
@@ -99,6 +122,15 @@ class MainActivity : AppCompatActivity() {
         targetSpinner = findViewById(R.id.targetSpinner)
         speedSection = findViewById(R.id.speedSection)
         speedSpinner = findViewById(R.id.speedSpinner)
+        googleStatus = findViewById(R.id.googleStatus)
+        googleRecheck = findViewById(R.id.googleRecheck)
+        watchSection = findViewById(R.id.watchSection)
+        watchLanguages = findViewById(R.id.watchLanguages)
+        watchChoose = findViewById(R.id.watchChoose)
+        watchNote = findViewById(R.id.watchNote)
+        watchChoose.setOnClickListener { if (isGoogleMode()) chooseGoogleLanguages() else chooseAutoLanguages() }
+        findViewById<TextView>(R.id.versionText).text = getString(R.string.version_label, appVersion())
+        sizeSpinner = findViewById(R.id.sizeSpinner)
         startButton = findViewById(R.id.startButton)
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
@@ -109,6 +141,8 @@ class MainActivity : AppCompatActivity() {
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         speedSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, WhisperSpeed.entries.map { it.label })
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        sizeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, CaptionSize.entries.map { it.label })
+            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
 
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         val savedSource = prefs.getString("source", "en")
@@ -116,21 +150,40 @@ class MainActivity : AppCompatActivity() {
         sourceSpinner.setSelection(Languages.spoken.indexOfFirst { it.code == savedSource }.coerceAtLeast(0))
         targetSpinner.setSelection(Languages.caption.indexOfFirst { it.code == savedTarget }.coerceAtLeast(0))
         speedSpinner.setSelection(WhisperSpeed.entries.indexOf(WhisperSpeed.fromKey(prefs.getString("speed", null))))
+        sizeSpinner.setSelection(CaptionSize.entries.indexOf(CaptionSize.fromKey(prefs.getString("caption_size", null))))
 
-        // Automatic detection is the default wherever this phone can run it.
-        if (WhisperLib.available) {
-            val auto = prefs.getString("mode", CaptionService.MODE_AUTO) == CaptionService.MODE_AUTO
-            modeGroup.check(if (auto) R.id.modeAuto else R.id.modeLive)
-        } else {
+        // Google is the default once the phone is found to support it (checked just below).
+        val savedMode = prefs.getString("mode", null)
+        if (!WhisperLib.available) {
             modeAuto.isEnabled = false
             autoUnavailable.visibility = View.VISIBLE
-            modeGroup.check(R.id.modeLive)
         }
+        modeGoogle.isEnabled = false
+        modeGroup.check(
+            when {
+                savedMode == CaptionService.MODE_LIVE || !WhisperLib.available -> R.id.modeLive
+                else -> R.id.modeAuto
+            },
+        )
         showModeSections()
+        checkGoogle(preferGoogle = savedMode == null || savedMode == CaptionService.MODE_GOOGLE)
+        googleRecheck.setOnClickListener {
+            GoogleSpeech.forgetAppSoundCheck(this)
+            checkGoogle(preferGoogle = true)
+        }
 
         val save = {
+            // A new accuracy choice means Automatic should time the models again.
+            val previousSpeed = prefs.getString("speed", null)
+            if (previousSpeed != null && previousSpeed != selectedSpeed().key) WhisperEngine.forgetSpeedTests(this)
+            val mode = when {
+                isGoogleMode() -> CaptionService.MODE_GOOGLE
+                isAutoMode() -> CaptionService.MODE_AUTO
+                else -> CaptionService.MODE_LIVE
+            }
             prefs.edit()
-                .putString("mode", if (isAutoMode()) CaptionService.MODE_AUTO else CaptionService.MODE_LIVE)
+                .putString("mode", mode)
+                .putString("caption_size", CaptionSize.entries[sizeSpinner.selectedItemPosition.coerceAtLeast(0)].key)
                 .putString("source", selectedSpoken().code)
                 .putString("target", selectedCaption().code)
                 .putString("speed", selectedSpeed().key)
@@ -148,6 +201,7 @@ class MainActivity : AppCompatActivity() {
         sourceSpinner.onItemSelectedListener = onChange
         targetSpinner.onItemSelectedListener = onChange
         speedSpinner.onItemSelectedListener = onChange
+        sizeSpinner.onItemSelectedListener = onChange
 
         startButton.setOnClickListener {
             if (CaptionService.isRunning) stopCaptions() else startCaptions()
@@ -180,14 +234,273 @@ class MainActivity : AppCompatActivity() {
         val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         when {
             missing.isNotEmpty() -> permissionLauncher.launch(missing.toTypedArray())
+            isGoogleMode() -> prepareGoogle()
             isAutoMode() -> prepareAuto()
             else -> prepareSpeechModel()
         }
     }
 
+    // ---- Google mode ----
+
+    /** Finds out whether this phone has Google's on-phone recogniser, and lists its languages. */
+    private fun checkGoogle(preferGoogle: Boolean) {
+        googleStatus.text = getString(R.string.google_checking)
+        googleRecheck.visibility = View.GONE
+        GoogleSpeech.checkSupport(this) { support ->
+            googleSupport = support
+            when (support) {
+                is GoogleSpeech.Support.Unavailable -> {
+                    modeGoogle.isEnabled = false
+                    googleStatus.text = "Google speech recognition: not available. ${support.reason}"
+                    googleRecheck.visibility = View.VISIBLE
+                    if (modeGroup.checkedRadioButtonId == R.id.modeGoogle) {
+                        modeGroup.check(if (WhisperLib.available) R.id.modeAuto else R.id.modeLive)
+                    }
+                }
+                is GoogleSpeech.Support.Ready -> {
+                    modeGoogle.isEnabled = !busy && !CaptionService.isRunning
+                    googleStatus.text = "Google speech recognition: ready on this phone. " +
+                        "${support.installed.size} languages downloaded, ${support.downloadable.size} more available."
+                    if (preferGoogle) modeGroup.check(R.id.modeGoogle)
+                }
+            }
+            showModeSections()
+            if (!busy && !CaptionService.isRunning) setStatus(describeChoice())
+        }
+    }
+
+    /** Every language Google can recognise on this phone, downloaded ones first. */
+    private fun googleCatalogue(support: GoogleSpeech.Support.Ready): List<String> {
+        val all = (support.installed.sortedBy { GoogleSpeech.displayName(it) } +
+            support.downloadable.sortedBy { GoogleSpeech.displayName(it) }).distinct()
+        // The phone didn't list its languages: offer the phone's own language.
+        return all.ifEmpty { listOf(java.util.Locale.getDefault().toLanguageTag()) }
+    }
+
+    /** The languages you watch, as saved; the first is the one Google starts listening for. */
+    private fun chosenGoogleLanguages(): List<String> {
+        val support = googleSupport as? GoogleSpeech.Support.Ready ?: return emptyList()
+        val catalogue = googleCatalogue(support)
+        val saved = getSharedPreferences("settings", MODE_PRIVATE).getString("google_languages", null)
+            ?.split(",")?.filter { it in catalogue }.orEmpty()
+        if (saved.isNotEmpty()) return saved
+        // Nothing chosen yet: start with the phone's own language.
+        val own = java.util.Locale.getDefault()
+        return listOfNotNull(
+            catalogue.firstOrNull { it == own.toLanguageTag() }
+                ?: catalogue.firstOrNull { GoogleSpeech.codeOf(it) == own.language }
+                ?: catalogue.firstOrNull(),
+        )
+    }
+
+    private fun saveChosenGoogleLanguages(tags: List<String>) {
+        getSharedPreferences("settings", MODE_PRIVATE).edit().putString("google_languages", tags.joinToString(",")).apply()
+    }
+
+    private fun showGoogleLanguages() {
+        val chosen = chosenGoogleLanguages()
+        val names = chosen.joinToString(", ") { GoogleSpeech.displayName(it) }
+        watchLanguages.text = when {
+            chosen.isEmpty() -> "None yet."
+            chosen.size == 1 -> names
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> "$names. Switches between them by itself."
+            else -> "$names. Automatic switching needs Android 14, so it listens for ${GoogleSpeech.displayName(chosen.first())}."
+        }
+    }
+
+    /** Lets you tick every language you watch, then downloads them once. */
+    private fun chooseGoogleLanguages() {
+        val support = googleSupport as? GoogleSpeech.Support.Ready ?: return
+        val catalogue = googleCatalogue(support)
+        val chosen = chosenGoogleLanguages().toMutableList()
+        val labels = catalogue.map { tag ->
+            val name = GoogleSpeech.displayName(tag)
+            if (tag in support.installed || GoogleSpeech.alreadyFetched(this, tag)) name else "$name (download)"
+        }.toTypedArray()
+        val checked = BooleanArray(catalogue.size) { catalogue[it] in chosen }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Languages I watch")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                val tag = catalogue[which]
+                if (isChecked) {
+                    if (tag !in chosen) chosen += tag
+                } else {
+                    chosen -= tag
+                }
+            }
+            .setPositiveButton("Done") { _, _ ->
+                if (chosen.isEmpty()) return@setPositiveButton
+                saveChosenGoogleLanguages(chosen)
+                showGoogleLanguages()
+                // Download everything now, so captions never wait for it while you're scrolling.
+                busy = true
+                refreshUi()
+                downloadGoogleLanguages(chosen) {
+                    busy = false
+                    progress.visibility = View.GONE
+                    refreshUi()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Downloads, once, Google's speech pack for each language and its translation pack. Anything
+     * already on the phone is skipped, so this is instant after the first time.
+     */
+    private fun downloadGoogleLanguages(tags: List<String>, done: () -> Unit) {
+        val support = googleSupport as? GoogleSpeech.Support.Ready
+        val toFetch = tags.filter { support == null || it !in support.installed }
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+        val problems = ArrayList<String>()
+        GoogleSpeech.downloadAll(this, toFetch, { tag, index, total ->
+            setStatus("Downloading ${GoogleSpeech.displayName(tag)} for Google speech, ${index + 1} of $total (first time only)…")
+        }) { failedSpeech ->
+            problems += failedSpeech.map { GoogleSpeech.displayName(it) }
+            downloadTranslations(tags.map { GoogleSpeech.codeOf(it) }) { failedTranslation ->
+                problems += failedTranslation.map { "${Languages.nameFor(it)} translation" }
+                setStatus(
+                    if (problems.isEmpty()) {
+                        "Your languages are on the phone. Tap Start captions."
+                    } else {
+                        "Downloaded, except: ${problems.joinToString(", ")}. Check your connection and choose the languages again to retry."
+                    },
+                )
+                done()
+            }
+        }
+    }
+
+    /**
+     * Downloads, once, the translation packs for [codes] and for the caption language. Packs already
+     * on the phone are skipped, so this is instant after the first time. [done] gets the ones that failed.
+     */
+    private fun downloadTranslations(codes: List<String>, done: (List<String>) -> Unit) {
+        val target = selectedCaption().code
+        val wanted = (codes + target).distinct()
+        // Nothing to translate if every language you watch is the one you read.
+        if (wanted.all { it == target }) {
+            done(emptyList())
+            return
+        }
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+        TranslationPacks.download(this, wanted, { code, index, total ->
+            setStatus("Downloading the ${Languages.nameFor(code)} translation, ${index + 1} of $total (first time only)…")
+        }, done)
+    }
+
+    // ---- Whisper mode: the languages you watch ----
+
+    /** Every language the phone can translate (Google ML Kit), by name. */
+    private fun translatableLanguages(): List<String> =
+        TranslateLanguage.getAllLanguages().sortedBy { Languages.nameFor(it) }
+
+    /** The languages you've ticked for Whisper mode. Nothing chosen yet: the phone's own language. */
+    private fun chosenAutoLanguages(): List<String> {
+        val all = TranslateLanguage.getAllLanguages().toSet()
+        val saved = getSharedPreferences("settings", MODE_PRIVATE).getString("auto_languages", null)
+        if (saved != null) return saved.split(",").filter { it in all }
+        val own = java.util.Locale.getDefault().language
+        return if (own in all) listOf(own) else emptyList()
+    }
+
+    private fun showAutoLanguages() {
+        val chosen = chosenAutoLanguages()
+        watchLanguages.text = if (chosen.isEmpty()) {
+            "None ticked. Any language still works, but its translation downloads the first time it's heard."
+        } else {
+            chosen.joinToString(", ") { Languages.nameFor(it) }
+        }
+    }
+
+    /** Lets you tick the languages you watch, then downloads their translations once. */
+    private fun chooseAutoLanguages() {
+        val catalogue = translatableLanguages()
+        val chosen = chosenAutoLanguages().toMutableList()
+        val onPhone = TranslationPacks.known(this)
+        val labels = catalogue.map { code ->
+            val name = Languages.nameFor(code)
+            if (code == "en" || code in onPhone) name else "$name (download)"
+        }.toTypedArray()
+        val checked = BooleanArray(catalogue.size) { catalogue[it] in chosen }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Languages I watch")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                val code = catalogue[which]
+                if (isChecked) {
+                    if (code !in chosen) chosen += code
+                } else {
+                    chosen -= code
+                }
+            }
+            .setPositiveButton("Done") { _, _ ->
+                getSharedPreferences("settings", MODE_PRIVATE).edit()
+                    .putString("auto_languages", chosen.joinToString(",")).apply()
+                showAutoLanguages()
+                busy = true
+                refreshUi()
+                downloadTranslations(chosen) { failed ->
+                    busy = false
+                    progress.visibility = View.GONE
+                    refreshUi()
+                    setStatus(
+                        if (failed.isEmpty()) {
+                            "Your languages are on the phone. Tap Start captions."
+                        } else {
+                            "Downloaded, except the ${failed.joinToString(", ") { Languages.nameFor(it) }} translation. " +
+                                "Check your connection and choose the languages again to retry."
+                        },
+                    )
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Google mode: make sure your languages are downloaded (instant after the first time), then share the sound. */
+    private fun prepareGoogle() {
+        if (googleSupport !is GoogleSpeech.Support.Ready) {
+            fail("Google speech recognition isn't ready on this phone. Choose another option.")
+            return
+        }
+        val chosen = chosenGoogleLanguages()
+        if (chosen.isEmpty()) {
+            fail("Tap Choose languages and tick the languages in the videos first.")
+            return
+        }
+        downloadGoogleLanguages(chosen) { startGoogle(chosen) }
+    }
+
+    private fun startGoogle(chosen: List<String>) {
+        // Only languages that are really on the phone (or that the phone has accepted to download).
+        val installed = (googleSupport as? GoogleSpeech.Support.Ready)?.installed.orEmpty()
+        val usable = chosen.filter { it in installed || GoogleSpeech.alreadyFetched(this, it) }.ifEmpty { chosen }
+        val primary = usable.first()
+        val switchTo = if (usable.size > 1) usable else emptyList()
+
+        // If Whisper's files are already on the phone, pass them along as a backup.
+        val plan = WhisperModels.plan(this, selectedSpeed())
+        val backupReady = WhisperLib.available && plan.downloads.all { WhisperModels.isDownloaded(this, it) }
+        val launch = Launch(
+            auto = false,
+            google = true,
+            googleLanguage = primary,
+            googleSwitch = switchTo,
+            watched = usable.map { GoogleSpeech.codeOf(it) },
+            whisperModels = if (backupReady) plan.models.map { WhisperModels.file(this, it).absolutePath } else emptyList(),
+            vadModel = if (backupReady) WhisperModels.file(this, WhisperModels.speechDetector).absolutePath else null,
+            automaticSpeed = selectedSpeed() == WhisperSpeed.AUTOMATIC,
+        )
+        requestSoundSharing(launch)
+    }
+
     /** Auto mode: the Whisper model(s) for this phone plus the speech detector. */
     private fun prepareAuto() {
         val plan = WhisperModels.plan(this, selectedSpeed())
+        val watched = chosenAutoLanguages()
         progress.visibility = View.VISIBLE
         progress.isIndeterminate = true
         setStatus("Getting automatic detection ready…")
@@ -207,10 +520,17 @@ class MainActivity : AppCompatActivity() {
                 }
                 val launch = Launch(
                     auto = true,
+                    watched = watched,
                     whisperModels = plan.models.map { WhisperModels.file(this, it).absolutePath },
                     vadModel = WhisperModels.file(this, WhisperModels.speechDetector).absolutePath,
+                    automaticSpeed = selectedSpeed() == WhisperSpeed.AUTOMATIC,
                 )
-                runOnUiThread { requestSoundSharing(launch) }
+                // Load the speech model while the translations are checked and Android's sharing question is on screen.
+                WhisperEngine.preload(this, launch.whisperRequest())
+                runOnUiThread {
+                    // The translations for your languages, before captions start (instant once they're on the phone).
+                    downloadTranslations(launch.watched) { requestSoundSharing(launch) }
+                }
             } catch (e: Exception) {
                 runOnUiThread {
                     fail("Couldn't download the automatic detection files: ${e.message}. Check your internet connection and tap Start captions again.")
@@ -246,7 +566,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun prepareTranslation(spoken: SpokenLanguage, caption: CaptionLanguage, modelPath: String) {
-        val launch = Launch(auto = false, voskModel = modelPath)
+        val launch = Launch(auto = false, voskModel = modelPath, watched = listOf(spoken.code))
         if (spoken.code == caption.code) {
             requestSoundSharing(launch)
             return
@@ -257,6 +577,12 @@ class MainActivity : AppCompatActivity() {
             fail("Translating ${spoken.name} into ${caption.name} isn't available.")
             return
         }
+        // Already on the phone: no waiting, no "first time" message.
+        val packs = TranslationPacks.known(this)
+        if (spoken.code in packs && (caption.code == "en" || caption.code in packs)) {
+            requestSoundSharing(launch)
+            return
+        }
         progress.isIndeterminate = true
         setStatus("Getting ${spoken.name} → ${caption.name} translation ready (first time only)…")
         val translator = Translation.getClient(
@@ -265,6 +591,7 @@ class MainActivity : AppCompatActivity() {
         translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
             .addOnSuccessListener {
                 translator.close()
+                TranslationPacks.remember(this, listOf(spoken.code, caption.code))
                 requestSoundSharing(launch)
             }
             .addOnFailureListener { e ->
@@ -276,10 +603,15 @@ class MainActivity : AppCompatActivity() {
     private fun requestSoundSharing(launch: Launch) {
         pendingLaunch = launch
         progress.visibility = View.GONE
-        setStatus("Android will now ask to share your screen. Tap Start. Only the sound is used.")
+        setStatus(
+            "Android will now ask what to share. Choose “A single app” and pick the app you'll watch, such as " +
+                "TikTok, so your notifications stay visible. Only the sound is used.",
+        )
         val manager = getSystemService(MediaProjectionManager::class.java)
+        // Let the user share a single app or the whole screen. Sharing one app keeps notifications visible,
+        // because Android hides notification content while the whole screen is shared.
         val request = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+            manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForUserChoice())
         } else {
             manager.createScreenCaptureIntent()
         }
@@ -292,10 +624,21 @@ class MainActivity : AppCompatActivity() {
             putExtra(CaptionService.EXTRA_RESULT_CODE, resultCode)
             putExtra(CaptionService.EXTRA_RESULT_DATA, data)
             putExtra(CaptionService.EXTRA_TARGET, selectedCaption().code)
-            if (launch.auto) {
+            putStringArrayListExtra(CaptionService.EXTRA_WATCHED, ArrayList(launch.watched))
+            if (launch.google) {
+                putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_GOOGLE)
+                putExtra(CaptionService.EXTRA_GOOGLE_LANGUAGE, launch.googleLanguage)
+                putStringArrayListExtra(CaptionService.EXTRA_GOOGLE_SWITCH, ArrayList(launch.googleSwitch))
+                if (launch.whisperModels.isNotEmpty()) {
+                    putExtra(CaptionService.EXTRA_WHISPER_MODELS, launch.whisperModels.toTypedArray())
+                    putExtra(CaptionService.EXTRA_VAD_PATH, launch.vadModel)
+                    putExtra(CaptionService.EXTRA_AUTOMATIC_SPEED, launch.automaticSpeed)
+                }
+            } else if (launch.auto) {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_AUTO)
                 putExtra(CaptionService.EXTRA_WHISPER_MODELS, launch.whisperModels.toTypedArray())
                 putExtra(CaptionService.EXTRA_VAD_PATH, launch.vadModel)
+                putExtra(CaptionService.EXTRA_AUTOMATIC_SPEED, launch.automaticSpeed)
             } else {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_LIVE)
                 putExtra(CaptionService.EXTRA_MODEL_PATH, launch.voskModel)
@@ -306,7 +649,11 @@ class MainActivity : AppCompatActivity() {
         CaptionService.isRunning = true
         refreshUi()
         setStatus(runningMessage())
-        openTikTok()
+        // After sharing a single app, Android has already opened it. After sharing the whole screen,
+        // the user is back here, so open TikTok for them.
+        window.decorView.postDelayed({
+            if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) openTikTok()
+        }, 700L)
     }
 
     private fun stopCaptions() {
@@ -327,6 +674,8 @@ class MainActivity : AppCompatActivity() {
     private fun hasAudioPermission() =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
+    private fun isGoogleMode() = modeGroup.checkedRadioButtonId == R.id.modeGoogle && googleSupport is GoogleSpeech.Support.Ready
+
     private fun isAutoMode() = WhisperLib.available && modeGroup.checkedRadioButtonId == R.id.modeAuto
 
     private fun selectedSpoken() = Languages.spoken[sourceSpinner.selectedItemPosition.coerceAtLeast(0)]
@@ -336,13 +685,26 @@ class MainActivity : AppCompatActivity() {
     private fun selectedSpeed() = WhisperSpeed.entries[speedSpinner.selectedItemPosition.coerceAtLeast(0)]
 
     private fun showModeSections() {
+        val google = isGoogleMode()
         val auto = isAutoMode()
-        sourceSpinner.visibility = if (auto) View.GONE else View.VISIBLE
+        watchSection.visibility = if (google || auto) View.VISIBLE else View.GONE
+        if (google) {
+            watchNote.setText(R.string.google_note)
+            showGoogleLanguages()
+        } else if (auto) {
+            watchNote.setText(R.string.auto_note)
+            showAutoLanguages()
+        }
+        sourceSpinner.visibility = if (google || auto) View.GONE else View.VISIBLE
         speedSection.visibility = if (auto) View.VISIBLE else View.GONE
     }
 
     private fun describeChoice(): String {
         val caption = selectedCaption()
+        if (isGoogleMode()) {
+            return "Google writes the words as people speak and Clip Captions translates them into ${caption.name}, " +
+                "all on your phone and free."
+        }
         if (isAutoMode()) {
             return if (caption.code == "en") {
                 "Detects the language of each video and shows the words in English."
@@ -367,11 +729,20 @@ class MainActivity : AppCompatActivity() {
         val editable = !busy && !running
         startButton.text = if (running) "Stop captions" else "Start captions"
         startButton.isEnabled = !busy
+        modeGoogle.isEnabled = editable && googleSupport is GoogleSpeech.Support.Ready
         modeAuto.isEnabled = editable && WhisperLib.available
         modeLive.isEnabled = editable
+        watchChoose.isEnabled = editable
+        sizeSpinner.isEnabled = editable
         sourceSpinner.isEnabled = editable
         targetSpinner.isEnabled = editable
         speedSpinner.isEnabled = editable
+    }
+
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (e: Exception) {
+        "?"
     }
 
     private fun setStatus(message: String) {

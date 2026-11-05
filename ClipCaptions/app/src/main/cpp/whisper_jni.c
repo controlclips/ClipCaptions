@@ -9,10 +9,18 @@
 // Segments Whisper itself rates as probably not speech are dropped.
 #define NO_SPEECH_LIMIT 0.6f
 
-static void quiet_log(enum ggml_log_level level, const char *text, void *user_data) {
+// Whisper's confidence (0-1) in the language it detected during the last transcription, or -1.
+// Whisper only reports this in its log, so the log is read for it and otherwise kept quiet.
+static volatile float last_language_confidence = -1.0f;
+
+static void read_log(enum ggml_log_level level, const char *text, void *user_data) {
     (void) level;
-    (void) text;
     (void) user_data;
+    if (text == NULL) return;
+    const char *found = strstr(text, "auto-detected language:");
+    if (found == NULL) return;
+    const char *p = strstr(found, "(p = ");
+    if (p != NULL) last_language_confidence = strtof(p + 5, NULL);
 }
 
 static struct whisper_context *as_context(jlong handle) {
@@ -22,7 +30,7 @@ static struct whisper_context *as_context(jlong handle) {
 JNIEXPORT jlong JNICALL
 Java_com_clipcaptions_app_WhisperLib_nativeInit(JNIEnv *env, jclass clazz, jstring model_path) {
     (void) clazz;
-    whisper_log_set(quiet_log, NULL);
+    whisper_log_set(read_log, NULL);
 
     const char *path = (*env)->GetStringUTFChars(env, model_path, NULL);
     if (path == NULL) return 0;
@@ -45,11 +53,13 @@ Java_com_clipcaptions_app_WhisperLib_nativeFree(JNIEnv *env, jclass clazz, jlong
 
 // Transcribes (or translates into English) one chunk of 16 kHz mono audio.
 // language: a code such as "es" once the video's language is known, or "auto" to detect it.
+// audio_ctx: how much of Whisper's 30-second window to process (1500 = all, 0 = default).
+//            Our chunks are a few seconds long, so a shorter window makes it much faster.
 // Returns the text as UTF-8 bytes (empty when no speech was found), or null on failure.
 JNIEXPORT jbyteArray JNICALL
 Java_com_clipcaptions_app_WhisperLib_nativeTranscribe(
         JNIEnv *env, jclass clazz, jlong handle, jfloatArray samples,
-        jint threads, jboolean translate, jstring language) {
+        jint threads, jboolean translate, jstring language, jint audio_ctx) {
     (void) clazz;
     struct whisper_context *ctx = as_context(handle);
     if (ctx == NULL || samples == NULL) return NULL;
@@ -83,6 +93,7 @@ Java_com_clipcaptions_app_WhisperLib_nativeTranscribe(
     params.temperature = 0.0f;
     params.temperature_inc = 0.0f; // No slow retries; the app filters out bad output instead.
     params.no_speech_thold = NO_SPEECH_LIMIT;
+    params.audio_ctx = audio_ctx > 0 ? audio_ctx : 0;
 
     // Speech detection is done separately (nativeHasSpeech), on one thread.
     params.vad = false;
@@ -91,6 +102,7 @@ Java_com_clipcaptions_app_WhisperLib_nativeTranscribe(
     jfloat *audio = (*env)->GetFloatArrayElements(env, samples, NULL);
     if (audio == NULL) return NULL;
 
+    last_language_confidence = -1.0f;
     int result = whisper_full(ctx, params, audio, count);
 
     (*env)->ReleaseFloatArrayElements(env, samples, audio, JNI_ABORT);
@@ -145,6 +157,14 @@ Java_com_clipcaptions_app_WhisperLib_nativeLanguage(JNIEnv *env, jclass clazz, j
     return (*env)->NewStringUTF(env, code != NULL ? code : "");
 }
 
+// How sure Whisper was of the language it detected in the last chunk (0-1), or -1 if it didn't detect one.
+JNIEXPORT jfloat JNICALL
+Java_com_clipcaptions_app_WhisperLib_nativeLanguageConfidence(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    return last_language_confidence;
+}
+
 // ---- Speech detector (Silero VAD) ----
 // Run on a single thread: the model is tiny, and extra threads only fight the video for the CPU.
 
@@ -154,7 +174,7 @@ Java_com_clipcaptions_app_WhisperLib_nativeLanguage(JNIEnv *env, jclass clazz, j
 JNIEXPORT jlong JNICALL
 Java_com_clipcaptions_app_WhisperLib_nativeInitVad(JNIEnv *env, jclass clazz, jstring model_path) {
     (void) clazz;
-    whisper_log_set(quiet_log, NULL);
+    whisper_log_set(read_log, NULL);
 
     const char *path = (*env)->GetStringUTFChars(env, model_path, NULL);
     if (path == NULL) return 0;

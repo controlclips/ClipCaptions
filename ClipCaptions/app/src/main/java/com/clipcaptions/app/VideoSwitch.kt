@@ -46,11 +46,11 @@ class VideoSwitchLogic(private val touchWindowMs: Long = 2500L) {
  */
 class SpeechChunker(
     private val sampleRate: Int = 16000,
-    private val minChunkMs: Int = 2500,
-    private val maxChunkMs: Int = 8000,
-    private val pauseMs: Int = 400,
+    private val minChunkMs: Int = 1600,
+    private val maxChunkMs: Int = 6000,
+    private val pauseMs: Int = 300,
     private val leadInMs: Int = 300,
-    private val searchBackMs: Int = 2500,
+    private val searchBackMs: Int = 2000,
     private val loudLevel: Int = 400,
 ) {
     private val maxSamples = sampleRate * maxChunkMs / 1000
@@ -182,8 +182,12 @@ class SpeechChunker(
     }
 }
 
-/** Picks the language of a video from Whisper's guesses and sticks to it once two chunks in a row agree. */
-class LanguageLock {
+/**
+ * Picks the language of a video from Whisper's guesses and sticks to it: straight away when Whisper
+ * is confident, otherwise once two chunks in a row agree. After that Whisper is told the language,
+ * which is faster than detecting it and stops it switching mid-video.
+ */
+class LanguageLock(private val confidentAt: Float = 0.7f) {
     var locked: String? = null
         private set
     private var lastGuess = ""
@@ -193,9 +197,68 @@ class LanguageLock {
         lastGuess = ""
     }
 
-    /** Records Whisper's guess for a chunk that contained words. */
-    fun record(guess: String) {
+    /** Records Whisper's guess for a chunk that contained words, with its confidence (0–1, or -1 if unknown). */
+    fun record(guess: String, confidence: Float) {
         if (locked != null || guess.isEmpty()) return
-        if (guess == lastGuess) locked = guess else lastGuess = guess
+        if (confidence >= confidentAt || guess == lastGuess) locked = guess else lastGuess = guess
     }
+}
+
+/**
+ * After a swipe, Google's recogniser keeps listening (restarting it would cost up to a second),
+ * but the sentence it's building still starts with the old video's words. This drops them:
+ * it remembers how much had been heard at the swipe and removes that much from what follows,
+ * until the sentence finishes. Counts words, or characters for languages written without spaces.
+ * Contains no Android code so it can be tested on its own.
+ */
+class LeftoverWords {
+    private var latest = ""
+    private var cutWords = 0
+    private var cutChars = 0
+
+    /** Call when you move on to another video. */
+    fun cut() {
+        val heard = latest.trim()
+        if (heard.isEmpty()) return
+        if (heard.contains(' ')) {
+            cutWords = words(heard).size
+            cutChars = 0
+        } else {
+            cutChars = heard.length
+            cutWords = 0
+        }
+    }
+
+    /** Words still being spoken; returns what should be shown. */
+    fun onPartial(text: String): String {
+        latest = text
+        return strip(text)
+    }
+
+    /** A finished sentence; returns what should be shown. The next sentence starts clean. */
+    fun onFinal(text: String): String {
+        val shown = strip(text)
+        reset()
+        return shown
+    }
+
+    fun reset() {
+        latest = ""
+        cutWords = 0
+        cutChars = 0
+    }
+
+    private fun strip(text: String): String {
+        val t = text.trim()
+        return when {
+            cutWords > 0 -> {
+                val all = words(t)
+                if (all.size <= cutWords) "" else all.drop(cutWords).joinToString(" ")
+            }
+            cutChars > 0 -> if (t.length <= cutChars) "" else t.substring(cutChars).trim()
+            else -> t
+        }
+    }
+
+    private fun words(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
 }

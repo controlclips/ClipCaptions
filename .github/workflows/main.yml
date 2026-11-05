@@ -1,17 +1,54 @@
+# Builds Clip Captions and puts the APK on the repository's Releases page as a plain .apk file,
+# so it can be downloaded straight onto a phone (no zip, no Google Drive).
+#
+# This file must live at the TOP of the repository, in .github/workflows/.
+# It finds the app by itself, whether its files are in a ClipCaptions folder or at the top,
+# and always builds the newest copy (the highest versionCode).
+
 name: Build APK
 
 on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+# Uploading several files one after another starts several builds: only the newest one finishes.
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ClipCaptions
     steps:
       - uses: actions/checkout@v4
+
+      - name: Find the app
+        id: find
+        run: |
+          best=""; bestCode=-1; found=""
+          while IFS= read -r f; do
+            dir=$(dirname "$(dirname "$f")")
+            [ -f "$dir/settings.gradle.kts" ] || continue
+            code=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' "$f" | head -1)
+            name=$(grep -oP 'versionName\s*=\s*"\K[^"]+' "$f" | head -1)
+            found="$found\n  $dir (version $name)"
+            if [ "${code:-0}" -gt "$bestCode" ]; then best="$dir"; bestCode="${code:-0}"; bestName="$name"; fi
+          done < <(find . -path ./.git -prune -o -path '*/app/build.gradle.kts' -print)
+          if [ -z "$best" ]; then
+            echo "::error::Couldn't find the app's files (app/build.gradle.kts next to settings.gradle.kts)."
+            exit 1
+          fi
+          echo -e "Copies of the app in this repository:$found"
+          echo "Building version $bestName from $best"
+          if [ ! -f "$best/keystore/debug.keystore" ]; then
+            echo "::error::$best/keystore/debug.keystore is missing. Upload the keystore folder too, or the phone won't install updates over the old version."
+            exit 1
+          fi
+          echo "dir=$best" >> "$GITHUB_OUTPUT"
+          echo "version=$bestName" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -21,11 +58,41 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build the app
+        working-directory: ${{ steps.find.outputs.dir }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
+      - name: Name the APK after its version
+        id: apk
+        env:
+          DIR: ${{ steps.find.outputs.dir }}
+          VERSION: ${{ steps.find.outputs.version }}
+        run: |
+          file="ClipCaptions-$VERSION.apk"
+          cp "$DIR/app/build/outputs/apk/debug/app-debug.apk" "$file"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ClipCaptions-apk
-          path: ClipCaptions/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.apk.outputs.file }}
+
+      - name: Put the APK on the Releases page
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.find.outputs.version }}
+          APK: ${{ steps.apk.outputs.file }}
+        run: |
+          tag="v$VERSION-build$GITHUB_RUN_NUMBER"
+          gh release create "$tag" "$APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Clip Captions $VERSION (build $GITHUB_RUN_NUMBER)" \
+            --notes "On your phone, tap $APK under Assets to download it, then open it to install. It installs over the previous version." \
+            --latest
+          # Keep only the five newest builds on the Releases page.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[5:][].tagName' |
+            while read -r old; do
+              gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+            done
