@@ -66,6 +66,18 @@ object WhisperLib {
     /** True if the chunk holds enough speech to be worth sending to Whisper (music and noise don't count). */
     @JvmStatic
     external fun nativeHasSpeech(handle: Long, samples: FloatArray): Boolean
+
+    /** Sets the short window used for language spotting. Call once after loading a model for spotting. */
+    @JvmStatic
+    external fun nativePrepareDetect(handle: Long, threads: Int, audioContext: Int): Boolean
+
+    /** How likely each language is for this speech, indexed like [nativeLanguageCodes]. Null on failure. */
+    @JvmStatic
+    external fun nativeDetectLanguage(handle: Long, samples: FloatArray, threads: Int): FloatArray?
+
+    /** Whisper's language codes ("en", "es", …), in the order [nativeDetectLanguage] uses. */
+    @JvmStatic
+    external fun nativeLanguageCodes(): Array<String>?
 }
 
 object CpuFeatures {

@@ -26,7 +26,8 @@ enum class WhisperSpeed(val key: String, val label: String) {
  * smaller ones to step down to if the phone can't keep up.
  */
 data class WhisperPlan(val models: List<WhisperFile>) {
-    val downloads: List<WhisperFile> get() = models + WhisperModels.speechDetector
+    // The small model is always included: it spots each video's language quickly.
+    val downloads: List<WhisperFile> get() = (models + WhisperModels.fast + WhisperModels.speechDetector).distinct()
 }
 
 object WhisperModels {

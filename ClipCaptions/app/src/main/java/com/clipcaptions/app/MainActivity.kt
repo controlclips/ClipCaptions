@@ -45,6 +45,8 @@ class MainActivity : AppCompatActivity() {
         val whisperModels: List<String> = emptyList(),
         val vadModel: String? = null,
         val automaticSpeed: Boolean = true,
+        // Whisper's small model, for spotting each video's language quickly.
+        val spotterModel: String? = null,
     ) {
         fun whisperRequest() = WhisperEngine.Request(whisperModels, vadModel, automaticSpeed)
     }
@@ -329,6 +331,7 @@ class MainActivity : AppCompatActivity() {
         watchLanguages.text = when {
             chosen.isEmpty() -> "None yet."
             chosen.size == 1 -> names
+            WhisperLib.available -> "$names. Spots each video's language and switches by itself."
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> "$names. Switches between them by itself."
             else -> "$names. Automatic switching needs Android 14, so it listens for ${GoogleSpeech.displayName(chosen.first())}."
         }
@@ -362,9 +365,21 @@ class MainActivity : AppCompatActivity() {
                 busy = true
                 refreshUi()
                 downloadGoogleLanguages(chosen) {
-                    busy = false
-                    progress.visibility = View.GONE
-                    refreshUi()
+                    val finish = {
+                        busy = false
+                        progress.visibility = View.GONE
+                        refreshUi()
+                    }
+                    if (chosen.size > 1 && WhisperLib.available) {
+                        // Keep the languages' download result on screen once the spotter is done.
+                        val result = status.text.toString()
+                        downloadSpotter {
+                            finish()
+                            if (WhisperModels.isDownloaded(this, WhisperModels.fast)) setStatus(result)
+                        }
+                    } else {
+                        finish()
+                    }
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -497,7 +512,43 @@ class MainActivity : AppCompatActivity() {
             fail("Tap Choose languages and tick the languages in the videos first.")
             return
         }
-        downloadGoogleLanguages(chosen) { startGoogle(chosen) }
+        downloadGoogleLanguages(chosen) {
+            if (chosen.size > 1 && WhisperLib.available) downloadSpotter { startGoogle(chosen) } else startGoogle(chosen)
+        }
+    }
+
+    /**
+     * With several languages, the app spots each video's language itself (far quicker than Google's
+     * own detection), using Whisper's small model. Downloaded once, about 31 MB. If it can't be
+     * downloaded, captions still start and Google detects the language instead.
+     */
+    private fun downloadSpotter(done: () -> Unit) {
+        val item = WhisperModels.fast
+        if (WhisperModels.isDownloaded(this, item)) {
+            done()
+            return
+        }
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+        setStatus("Downloading the language spotter (31 MB, first time only)…")
+        io.execute {
+            val ok = try {
+                WhisperModels.ensure(this, item) { percent ->
+                    runOnUiThread {
+                        progress.isIndeterminate = false
+                        progress.progress = percent
+                        setStatus("Downloading the language spotter (31 MB, first time only)… $percent%")
+                    }
+                }
+                true
+            } catch (e: Exception) {
+                false
+            }
+            runOnUiThread {
+                if (!ok) setStatus("Couldn't download the language spotter, so Google will detect the language (slower).")
+                done()
+            }
+        }
     }
 
     private fun startGoogle(chosen: List<String>) {
@@ -516,6 +567,7 @@ class MainActivity : AppCompatActivity() {
             googleLanguage = primary,
             googleSwitch = switchTo,
             watched = usable.map { GoogleSpeech.codeOf(it) },
+            spotterModel = spotterIfDownloaded(),
             whisperModels = if (backupReady) plan.models.map { WhisperModels.file(this, it).absolutePath } else emptyList(),
             vadModel = if (backupReady) WhisperModels.file(this, WhisperModels.speechDetector).absolutePath else null,
             automaticSpeed = selectedSpeed() == WhisperSpeed.AUTOMATIC,
@@ -547,6 +599,7 @@ class MainActivity : AppCompatActivity() {
                 val launch = Launch(
                     auto = true,
                     watched = watched,
+                    spotterModel = spotterIfDownloaded(),
                     whisperModels = plan.models.map { WhisperModels.file(this, it).absolutePath },
                     vadModel = WhisperModels.file(this, WhisperModels.speechDetector).absolutePath,
                     automaticSpeed = selectedSpeed() == WhisperSpeed.AUTOMATIC,
@@ -651,6 +704,13 @@ class MainActivity : AppCompatActivity() {
             putExtra(CaptionService.EXTRA_RESULT_DATA, data)
             putExtra(CaptionService.EXTRA_TARGET, selectedCaption().code)
             putStringArrayListExtra(CaptionService.EXTRA_WATCHED, ArrayList(launch.watched))
+            launch.spotterModel?.let { putExtra(CaptionService.EXTRA_SPOTTER_MODEL, it) }
+            if (launch.auto) {
+                putStringArrayListExtra(
+                    CaptionService.EXTRA_WATCHED_WHISPER,
+                    ArrayList(launch.watched.map { LanguagePick.whisperCode(it) }),
+                )
+            }
             if (launch.google) {
                 putExtra(CaptionService.EXTRA_MODE, CaptionService.MODE_GOOGLE)
                 putExtra(CaptionService.EXTRA_GOOGLE_LANGUAGE, launch.googleLanguage)
@@ -764,6 +824,13 @@ class MainActivity : AppCompatActivity() {
         targetSpinner.isEnabled = editable
         speedSpinner.isEnabled = editable
     }
+
+    private fun spotterIfDownloaded(): String? =
+        if (WhisperLib.available && WhisperModels.isDownloaded(this, WhisperModels.fast)) {
+            WhisperModels.file(this, WhisperModels.fast).absolutePath
+        } else {
+            null
+        }
 
     private fun appVersion(): String = try {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "?"

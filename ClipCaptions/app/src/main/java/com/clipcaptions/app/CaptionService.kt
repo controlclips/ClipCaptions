@@ -37,6 +37,7 @@ import org.vosk.Recognizer
 import java.util.Collections
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
@@ -78,6 +79,17 @@ class CaptionService : Service() {
         // Google mode: the language to listen for, and (Android 14+) others to switch to automatically.
         const val EXTRA_GOOGLE_LANGUAGE = "googleLanguage"
         const val EXTRA_GOOGLE_SWITCH = "googleSwitch"
+
+        // Whisper's smallest model, used to spot each video's language quickly (Google with several
+        // languages, and Whisper mode).
+        const val EXTRA_SPOTTER_MODEL = "spotterModel"
+
+        // Whisper mode: the languages you watch (Whisper codes), to choose between when spotting.
+        // Empty means any language.
+        const val EXTRA_WATCHED_WHISPER = "watchedWhisper"
+
+        // Speech collected before spotting a video's language: enough to be reliable, short enough to be quick.
+        private const val SPOT_SAMPLES = 16000 * 18 / 10 // 1.8 seconds
 
         const val MODE_AUTO = "auto"
         const val MODE_LIVE = "live"
@@ -141,6 +153,14 @@ class CaptionService : Service() {
     private var liveTranslatedFrom = ""
     private var liveTranslation: String? = null
     private var pendingLiveAt = 0L
+
+    // Google with several languages: the app spots each video's language and tells Google.
+    @Volatile
+    private var spotter: LanguageSpotter? = null
+    private val spotterThread = Executors.newSingleThreadExecutor()
+    private var googleTags: List<String> = emptyList()
+    private var spotterPath: String? = null
+    private var watchedWhisper: List<String> = emptyList()
 
     // Speed readout: when people started speaking (set by the capture thread), and the delays seen.
     private val speed = SpeedStats()
@@ -232,6 +252,8 @@ class CaptionService : Service() {
         projection = mp
         isRunning = true
         targetCode = command.getStringExtra(EXTRA_TARGET) ?: "en"
+        spotterPath = command.getStringExtra(EXTRA_SPOTTER_MODEL)
+        watchedWhisper = command.getStringArrayListExtra(EXTRA_WATCHED_WHISPER).orEmpty()
         loadTranslationPacks()
         val watched = command.getStringArrayListExtra(EXTRA_WATCHED).orEmpty()
         autoMode = wantsAuto
@@ -252,8 +274,25 @@ class CaptionService : Service() {
             if (!showOverlay(googleLabel(googleLanguage))) return START_NOT_STICKY
             overlay?.setStatus("Listening… play a video")
             val switch = command.getStringArrayListExtra(EXTRA_GOOGLE_SWITCH).orEmpty()
-            val captioner = GoogleCaptioner(this, googleTag, switch, googleEvents)
+            googleTags = switch
+            // With several languages, spot each video's language here (a fraction of a second) rather
+            // than wait for Google's own detection, which can take several seconds.
+            val path = spotterPath
+            val spotHere = switch.size > 1 && path != null && WhisperLib.available
+            val captioner = GoogleCaptioner(this, googleTag, switch, googleEvents, googleDetects = !spotHere)
             google = captioner
+            if (spotHere && path != null) {
+                spotterThread.execute {
+                    val loaded = LanguageSpotter.load(path, spotterThreads())
+                    if (loaded == null) {
+                        main.post { google?.letGoogleDetect() }
+                    } else if (!keepRunning) {
+                        loaded.close()
+                    } else {
+                        spotter = loaded
+                    }
+                }
+            }
             keepRunning = true
             captioner.start()
             captureThread = Thread({ captureForGoogle(mp) }, "caption-capture").also { it.start() }
@@ -310,6 +349,12 @@ class CaptionService : Service() {
         projection = null
         google?.stop()
         google = null
+        // The spotter is freed on its own thread, after any spotting under way.
+        spotterThread.execute {
+            spotter?.close()
+            spotter = null
+        }
+        spotterThread.shutdown()
         overlay?.remove()
         overlay = null
         translator?.close()
@@ -514,6 +559,7 @@ class CaptionService : Service() {
             val buffer = ByteArray(1600)
 
             var quietMs = 1000L
+            val spot = SpotCollector()
 
             // No pause after a swipe: the old video's leftover words are dropped by the recogniser
             // side instead, so the new video's first words aren't cut off.
@@ -524,6 +570,7 @@ class CaptionService : Service() {
                 val loud = peakLevel(buffer, read) > SOUND_LEVEL
                 silence.onAudio(loud)
                 google?.feed(buffer, read)
+                if (spotter != null) spot.add(buffer, read, loud)
 
                 // For the speed readout: sound starting after a pause (or after a swipe) is when
                 // people start speaking; the clock stops when their first words appear.
@@ -549,6 +596,71 @@ class CaptionService : Service() {
         }
     }
 
+    /**
+     * Capture thread: collects the start of each video's speech, then spots its language on the
+     * spotter's thread. Once per video.
+     */
+    private inner class SpotCollector {
+        private val samples = FloatArray(SPOT_SAMPLES)
+        private var length = 0
+        private var forVideo = -1
+        private var done = false
+
+        fun add(buffer: ByteArray, read: Int, loud: Boolean) {
+            val now = video.get()
+            if (now != forVideo) {
+                forVideo = now
+                length = 0
+                done = false
+            }
+            if (done || (length == 0 && !loud)) return // Wait for the sound to start.
+            var i = 0
+            while (i + 1 < read && length < samples.size) {
+                val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
+                samples[length++] = sample / 32768f
+                i += 2
+            }
+            if (length < samples.size) return
+            done = true
+            val speech = samples.copyOf()
+            val videoNumber = forVideo
+            try {
+                spotterThread.execute { spotGoogleLanguage(speech, videoNumber) }
+            } catch (e: java.util.concurrent.RejectedExecutionException) {
+                // Captions are stopping.
+            }
+        }
+    }
+
+    /** Spotter thread: which of your languages this video is in. */
+    private fun spotGoogleLanguage(speech: FloatArray, videoNumber: Int) {
+        val sp = spotter ?: return
+        if (videoNumber != video.get()) return
+        val allowed = googleTags.map { LanguagePick.whisperCode(GoogleSpeech.codeOf(it)) }
+        val guess = sp.detect(speech, allowed, othersIfClear = false) ?: return
+        main.post { onGoogleLanguageSpotted(guess, videoNumber) }
+    }
+
+    /** Main thread: if the video isn't in the language Google is listening for, switch straight away. */
+    private fun onGoogleLanguageSpotted(guess: LanguageGuess, videoNumber: Int) {
+        if (!googleMode || videoNumber != video.get() || guess.confidence < 0.6f) return
+        val captioner = google ?: return
+        val tag = googleTags.firstOrNull { LanguagePick.whisperCode(GoogleSpeech.codeOf(it)) == guess.code } ?: return
+        if (tag == captioner.language) return
+        // The words shown so far were heard in the wrong language: start this video again.
+        captioner.switchTo(tag)
+        overlay?.clearCaptions()
+        splitter.reset()
+        liveGeneration++
+        pendingLive = null
+        liveText = ""
+        forgetLiveTranslation()
+        updateGoogleLabel(GoogleSpeech.codeOf(tag))
+    }
+
+    /** Spotting shares the phone with the video and Google, so it uses at most two cores. */
+    private fun spotterThreads() = DeviceProfile.threads().coerceAtMost(2)
+
     private fun onGooglePartial(text: String, language: String) {
         val box = overlay ?: return
         noteWordsAppeared()
@@ -560,7 +672,9 @@ class CaptionService : Service() {
             liveGeneration++
             pendingLive = null
             forgetLiveTranslation()
-            for (line in split.finished) showLine(box, line, language)
+            // A burst of words at once (the recogniser catching up) is old news by the time it
+            // arrives: show only the newest line rather than flood the box.
+            showLine(box, split.finished.last(), language)
         }
         showGoogleLive(box, split.live, language)
     }
@@ -719,7 +833,15 @@ class CaptionService : Service() {
             record = audio
             audio.startRecording()
             val silence = SilenceWatcher()
-            val chunker = SpeechChunker(sampleRate = SAMPLE_RATE, loudLevel = SOUND_LEVEL)
+            // Short chunks, and a shorter first one per video: captions come sooner and a few words at a
+            // time, instead of a long wait and then a wall of text.
+            val chunker = SpeechChunker(
+                sampleRate = SAMPLE_RATE,
+                minChunkMs = 1200,
+                maxChunkMs = 3500,
+                loudLevel = SOUND_LEVEL,
+                firstMaxChunkMs = 2000,
+            )
             val buffer = ShortArray(SAMPLE_RATE / 10) // 0.1 s
             var currentVideo = video.get()
             var skip = 0
@@ -740,7 +862,7 @@ class CaptionService : Service() {
                 if (nowVideo != currentVideo) {
                     // Another video: drop the old one's sound, including the moment of the switch.
                     currentVideo = nowVideo
-                    chunker.reset()
+                    chunker.newVideo()
                     skip = SWITCH_SKIP_SAMPLES
                 }
                 if (skip > 0) {
@@ -787,6 +909,16 @@ class CaptionService : Service() {
         main.post { overlay?.setStatus("Listening… play a video") }
 
         val threads = DeviceProfile.threads()
+        // Each video's language is spotted with the small model on a short window, so the main model
+        // only writes the words (detecting with the main model costs about as much again).
+        val path = spotterPath
+        val wsSpotter = when {
+            path == null -> null
+            path == request.models.getOrNull(session.level) -> LanguageSpotter.sharing(session.handle, threads)
+            else -> LanguageSpotter.load(path, threads)
+        }
+        // Choose between the languages you watch, and the one you read.
+        val allowed = if (watchedWhisper.isEmpty()) emptyList() else (watchedWhisper + LanguagePick.whisperCode(targetCode)).distinct()
         val languageLock = LanguageLock()
         var lockVideo = -1
         var slowScore = 0
@@ -808,7 +940,12 @@ class CaptionService : Service() {
                 }
 
                 // Once a video's language is settled, Whisper is told it rather than detecting it every chunk.
-                val language = languageLock.locked
+                // Until then, the small model spots it for each chunk.
+                var spotted: LanguageGuess? = null
+                val language = languageLock.locked ?: wsSpotter?.detect(chunk.samples, allowed, othersIfClear = true)?.also {
+                    spotted = it
+                    languageLock.record(it.code, it.confidence)
+                }?.code
                 // Whisper writes the words in their own language and ML Kit translates them, which is more
                 // accurate with these model sizes. Whisper translates into English itself for languages ML Kit
                 // can't translate, and for ones whose translation is still downloading, so nothing waits for it.
@@ -820,15 +957,15 @@ class CaptionService : Service() {
                     threads,
                     whisperTranslates,
                     language ?: "auto",
-                    WhisperEngine.AUDIO_CONTEXT,
+                    audioContextFor(chunk.samples.size),
                 )
                 val elapsed = SystemClock.elapsedRealtime() - started
                 if (!keepRunning) break
 
-                val heard = WhisperLib.nativeLanguage(session.handle)
-                val confidence = WhisperLib.nativeLanguageConfidence()
+                val heard = language ?: WhisperLib.nativeLanguage(session.handle)
+                val confidence = spotted?.confidence ?: WhisperLib.nativeLanguageConfidence()
                 val text = if (bytes == null) "" else WhisperText.clean(String(bytes, Charsets.UTF_8))
-                if (text.isNotEmpty()) languageLock.record(heard, confidence)
+                if (text.isNotEmpty() && language == null) languageLock.record(heard, confidence)
                 if (text.isNotEmpty() && text != previousText) {
                     previousText = text
                     val result = WhisperResult(text, heard, whisperTranslates, chunk.video)
@@ -851,8 +988,19 @@ class CaptionService : Service() {
         } catch (e: Exception) {
             reportStop(e)
         } finally {
+            wsSpotter?.close()
             session.close()
         }
+    }
+
+    /**
+     * How much of Whisper's 30-second window to process for a chunk: the chunk plus a margin. Short
+     * chunks are then much quicker than with a fixed window.
+     */
+    private fun audioContextFor(samples: Int): Int {
+        val frames = samples / 320 + 128 // 50 frames per second, plus a margin
+        val rounded = (frames + 63) / 64 * 64
+        return rounded.coerceIn(256, WhisperEngine.AUDIO_CONTEXT)
     }
 
     /** Main thread: shows what Whisper heard, translating it when needed. */

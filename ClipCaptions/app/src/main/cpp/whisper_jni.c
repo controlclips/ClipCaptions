@@ -220,3 +220,86 @@ Java_com_clipcaptions_app_WhisperLib_nativeHasSpeech(JNIEnv *env, jclass clazz, 
     whisper_vad_free_segments(segments);
     return speech >= MIN_SPEECH_CS ? JNI_TRUE : JNI_FALSE;
 }
+
+// ---- Language spotting ----
+// Whisper's smallest model works out which language a few seconds of speech are in. It's used to
+// pick the language before captioning starts, instead of slower detection with a bigger model.
+
+// Sets the (short) window that language spotting uses. whisper.cpp takes the window from the last
+// full run, so one run on a moment of silence sets it. Call once after loading the model.
+JNIEXPORT jboolean JNICALL
+Java_com_clipcaptions_app_WhisperLib_nativePrepareDetect(JNIEnv *env, jclass clazz, jlong handle, jint threads, jint audio_ctx) {
+    (void) env;
+    (void) clazz;
+    struct whisper_context *ctx = as_context(handle);
+    if (ctx == NULL) return JNI_FALSE;
+
+    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.n_threads = threads > 0 ? threads : 2;
+    params.language = "en";
+    params.detect_language = false;
+    params.no_context = true;
+    params.no_timestamps = true;
+    params.single_segment = true;
+    params.max_tokens = 1;
+    params.print_special = false;
+    params.print_progress = false;
+    params.print_realtime = false;
+    params.print_timestamps = false;
+    params.temperature_inc = 0.0f;
+    params.audio_ctx = audio_ctx > 0 ? audio_ctx : 0;
+    params.vad = false;
+
+    const int count = 17600; // 1.1 seconds
+    float *silence = calloc(count, sizeof(float));
+    if (silence == NULL) return JNI_FALSE;
+    int result = whisper_full(ctx, params, silence, count);
+    free(silence);
+    return result == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+// How likely each language is (indexed like nativeLanguageCodes) for 16 kHz mono speech, or null on failure.
+JNIEXPORT jfloatArray JNICALL
+Java_com_clipcaptions_app_WhisperLib_nativeDetectLanguage(JNIEnv *env, jclass clazz, jlong handle, jfloatArray samples, jint threads) {
+    (void) clazz;
+    struct whisper_context *ctx = as_context(handle);
+    if (ctx == NULL || samples == NULL) return NULL;
+
+    jsize count = (*env)->GetArrayLength(env, samples);
+    jfloat *audio = (*env)->GetFloatArrayElements(env, samples, NULL);
+    if (audio == NULL) return NULL;
+    int n_threads = threads > 0 ? threads : 2;
+    int mel = whisper_pcm_to_mel(ctx, audio, count, n_threads);
+    (*env)->ReleaseFloatArrayElements(env, samples, audio, JNI_ABORT);
+    if (mel != 0) return NULL;
+
+    int languages = whisper_lang_max_id() + 1;
+    float *probs = calloc(languages, sizeof(float));
+    if (probs == NULL) return NULL;
+    int top = whisper_lang_auto_detect(ctx, 0, n_threads, probs);
+    jfloatArray result = NULL;
+    if (top >= 0) {
+        result = (*env)->NewFloatArray(env, languages);
+        if (result != NULL) (*env)->SetFloatArrayRegion(env, result, 0, languages, probs);
+    }
+    free(probs);
+    return result;
+}
+
+// Whisper's language codes, such as "en" and "es", in the order nativeDetectLanguage uses.
+JNIEXPORT jobjectArray JNICALL
+Java_com_clipcaptions_app_WhisperLib_nativeLanguageCodes(JNIEnv *env, jclass clazz) {
+    (void) clazz;
+    int languages = whisper_lang_max_id() + 1;
+    jclass string_class = (*env)->FindClass(env, "java/lang/String");
+    if (string_class == NULL) return NULL;
+    jobjectArray codes = (*env)->NewObjectArray(env, languages, string_class, NULL);
+    if (codes == NULL) return NULL;
+    for (int i = 0; i < languages; i++) {
+        const char *code = whisper_lang_str(i);
+        jstring value = (*env)->NewStringUTF(env, code != NULL ? code : "");
+        (*env)->SetObjectArrayElement(env, codes, i, value);
+        (*env)->DeleteLocalRef(env, value);
+    }
+    return codes;
+}
