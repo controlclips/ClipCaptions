@@ -10,10 +10,10 @@ data class WhisperFile(val label: String, val fileName: String, val url: String)
 
 /** The accuracy setting shown in the app. */
 enum class WhisperSpeed(val key: String, val label: String) {
-    AUTOMATIC("auto", "Automatic (best this phone can keep up with)"),
-    FAST("fast", "Fast (31 MB)"),
-    BETTER("accurate", "Better (57 MB)"),
-    BEST("best", "Best (181 MB, recent phones only)"),
+    AUTOMATIC("auto", "Automatic (recommended)"),
+    FAST("fast", "Fast (31 MB download)"),
+    BETTER("accurate", "More accurate (57 MB)"),
+    BEST("best", "Most accurate (181 MB, newer phones)"),
     ;
 
     companion object {
@@ -35,13 +35,13 @@ object WhisperModels {
     private const val MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
 
     /** About 31 MB. Quick enough for older and budget phones. */
-    val fast = WhisperFile("fast speech model", "ggml-tiny-q5_1.bin", MODEL_URL + "ggml-tiny-q5_1.bin")
+    val fast = WhisperFile("speech model", "ggml-tiny-q5_1.bin", MODEL_URL + "ggml-tiny-q5_1.bin")
 
     /** About 57 MB. Noticeably more accurate; needs a reasonably recent phone. */
-    val better = WhisperFile("better speech model", "ggml-base-q5_1.bin", MODEL_URL + "ggml-base-q5_1.bin")
+    val better = WhisperFile("speech model", "ggml-base-q5_1.bin", MODEL_URL + "ggml-base-q5_1.bin")
 
     /** About 181 MB. The most accurate; needs a powerful phone. */
-    val best = WhisperFile("best speech model", "ggml-small-q5_1.bin", MODEL_URL + "ggml-small-q5_1.bin")
+    val best = WhisperFile("speech model", "ggml-small-q5_1.bin", MODEL_URL + "ggml-small-q5_1.bin")
 
     /** Under 1 MB. Tells speech apart from music and noise, so Whisper only works on speech. */
     val speechDetector = WhisperFile(
