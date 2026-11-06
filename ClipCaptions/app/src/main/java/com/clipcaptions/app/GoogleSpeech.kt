@@ -20,7 +20,7 @@ import android.system.Os
 import androidx.annotation.RequiresApi
 import java.io.IOException
 import java.util.Locale
-import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
@@ -242,6 +242,11 @@ class GoogleCaptioner(
     /** Android 14+: other downloaded languages to switch to automatically, or empty. */
     private val switchLanguages: List<String>,
     private val events: Events,
+    /**
+     * Whether Google itself detects which of [switchLanguages] is spoken. That's slow (often several
+     * seconds), so the app spots the language itself when it can and calls [switchTo] instead.
+     */
+    private var googleDetects: Boolean = true,
 ) {
 
     interface Events {
@@ -269,6 +274,13 @@ class GoogleCaptioner(
         // Sound kept while Google restarts between sentences (20 blocks of 0.05 s = 1 second),
         // then passed to the next session so the first words of the next sentence aren't lost.
         private const val GAP_BLOCKS = 20
+
+        // The last 3 seconds of sound, so a switch to another language can replay the video's start.
+        private const val RECENT_BLOCKS = 60
+
+        // A new session may take this long to catch up on replayed sound; after that, at most
+        // a second of sound waits, so captions can't drift behind the video.
+        private const val CATCH_UP_MS = 4000L
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -281,8 +293,15 @@ class GoogleCaptioner(
     @Volatile
     private var session: Session? = null
 
-    // Sound that arrived while no session was listening. Guarded by itself.
+    // Sound that arrived while no session was listening, and the last few seconds of sound.
+    // Both guarded by [gap].
     private val gap = ArrayDeque<ByteArray>()
+    private var gapLimit = GAP_BLOCKS
+    private val recent = ArrayDeque<ByteArray>()
+    private var blocksSinceVideo = 0
+
+    /** The language being listened for now, such as "es-ES". */
+    val language: String get() = currentLanguage
 
     // Restart limits: a phone that keeps failing gets reported instead of retried for ever.
     private val failureTimes = ArrayDeque<Long>()
@@ -293,8 +312,8 @@ class GoogleCaptioner(
         val readSide: ParcelFileDescriptor
         private val writeSide: ParcelFileDescriptor
         val capacity: Int
-        // At most about a second of sound waits here, so captions can't drift behind the video.
-        val queue = ArrayBlockingQueue<ByteArray>(20)
+        // Sound waiting for the recogniser (see [offer] for how much is kept).
+        val queue = LinkedBlockingQueue<ByteArray>()
         val written = AtomicLong(0)
         val startedAt = SystemClock.elapsedRealtime()
 
@@ -383,30 +402,62 @@ class GoogleCaptioner(
     fun feed(bytes: ByteArray, length: Int) {
         if (stopped) return
         val block = bytes.copyOf(length)
-        val s = session
-        if (s != null && s.open) {
-            offer(s, block)
-            return
-        }
         synchronized(gap) {
-            // Check again: a session may have started in the meantime.
-            val now = session
-            if (now != null && now.open) {
-                offer(now, block)
+            recent.addLast(block)
+            while (recent.size > RECENT_BLOCKS) recent.removeFirst()
+            if (blocksSinceVideo < RECENT_BLOCKS) blocksSinceVideo++
+            val s = session
+            if (s != null && s.open) {
+                offer(s, block)
             } else {
-                // Between sessions: keep the last second, to hand to the next session.
+                // Between sessions: keep it, to hand to the next session.
                 gap.addLast(block)
-                while (gap.size > GAP_BLOCKS) gap.removeFirst()
+                while (gap.size > gapLimit) gap.removeFirst()
             }
         }
     }
 
     /** If the recogniser falls behind, drop the oldest sound rather than lag behind the video. */
     private fun offer(s: Session, block: ByteArray) {
-        if (!s.queue.offer(block)) {
-            s.queue.poll()
-            s.queue.offer(block)
+        val catchingUp = SystemClock.elapsedRealtime() - s.startedAt < CATCH_UP_MS
+        val limit = if (catchingUp) RECENT_BLOCKS + GAP_BLOCKS else GAP_BLOCKS
+        while (s.queue.size >= limit) s.queue.poll()
+        s.queue.offer(block)
+    }
+
+    /**
+     * Main thread. Listen for another language from now on, starting again from the beginning of
+     * this video (up to 3 seconds back) so its first words are recognised in the right language.
+     */
+    fun switchTo(tag: String) {
+        if (stopped || tag == currentLanguage) return
+        currentLanguage = tag
+        synchronized(gap) {
+            val replay = recent.toList().takeLast(minOf(blocksSinceVideo, RECENT_BLOCKS))
+            val s = session
+            session = null
+            if (s != null) {
+                s.ended = true
+                s.close()
+            }
+            gap.clear()
+            gap.addAll(replay)
+            gapLimit = RECENT_BLOCKS + GAP_BLOCKS
         }
+        // A fresh recogniser, so nothing from the old language's session can arrive late.
+        recognizer?.destroy()
+        recognizer = createRecognizer()
+        if (recognizer == null) {
+            stopped = true
+            events.onProblem("Google's on-device speech recognition couldn't start.")
+            return
+        }
+        main.postDelayed({ if (!stopped && session == null) startSession() }, 30L)
+    }
+
+    /** Main thread. The app couldn't spot languages itself after all: let Google detect them. */
+    fun letGoogleDetect() {
+        googleDetects = true
     }
 
     /** Another video: keep listening, but drop the words that belonged to the old one. */
@@ -414,7 +465,10 @@ class GoogleCaptioner(
         if (stopped) return
         leftover.cut()
         // Sound kept between sessions belongs to the old video.
-        synchronized(gap) { gap.clear() }
+        synchronized(gap) {
+            gap.clear()
+            blocksSinceVideo = 0
+        }
     }
 
     fun stop() {
@@ -444,6 +498,7 @@ class GoogleCaptioner(
         // Hand over the sound heard while no session was listening, in order, then go live.
         synchronized(gap) {
             while (gap.isNotEmpty()) offer(s, gap.removeFirst())
+            gapLimit = GAP_BLOCKS
             session = s
         }
         leftover.reset()
@@ -459,7 +514,7 @@ class GoogleCaptioner(
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
             // Keep listening until the sound is closed, reporting each sentence as it finishes.
             putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && switchLanguages.size > 1) {
+            if (googleDetects && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && switchLanguages.size > 1) {
                 val allowed = ArrayList(switchLanguages)
                 putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
                 putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, allowed)

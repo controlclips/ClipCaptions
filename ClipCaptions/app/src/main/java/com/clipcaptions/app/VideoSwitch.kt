@@ -52,8 +52,21 @@ class SpeechChunker(
     private val leadInMs: Int = 300,
     private val searchBackMs: Int = 2000,
     private val loudLevel: Int = 400,
+    // The first chunk of each video is cut sooner, so its first words (and its language) come quickly.
+    private val firstMaxChunkMs: Int = maxChunkMs,
 ) {
     private val maxSamples = sampleRate * maxChunkMs / 1000
+    private val firstMaxSamples = sampleRate * minOf(firstMaxChunkMs, maxChunkMs) / 1000
+    private var firstOfVideo = true
+
+    /** The most a chunk may hold right now. */
+    private fun limit() = if (firstOfVideo) firstMaxSamples else maxSamples
+
+    /** Another video: forget what's collected, and cut its first chunk sooner. */
+    fun newVideo() {
+        reset()
+        firstOfVideo = true
+    }
     private val buffer = FloatArray(maxSamples + sampleRate) // room for one extra block
 
     // Each block of audio added: where it starts in the buffer, its length and loudest sample.
@@ -94,7 +107,7 @@ class SpeechChunker(
         }
         val loud = peak > loudLevel
 
-        if (length + n > maxSamples) cutAtQuietestPoint(ready)
+        if (length + n > limit()) cutAtQuietestPoint(ready)
 
         for (i in 0 until n) buffer[length + i] = samples[offset + i] / 32768f
         blockStart.add(length)
@@ -120,8 +133,9 @@ class SpeechChunker(
         val pausedMs = quietSamples * 1000L / sampleRate
         if (ms >= minChunkMs && pausedMs >= pauseMs) {
             ready.add(buffer.copyOf(length))
+            firstOfVideo = false
             reset()
-        } else if (length >= maxSamples) {
+        } else if (length >= limit()) {
             cutAtQuietestPoint(ready)
         }
     }
@@ -133,7 +147,9 @@ class SpeechChunker(
             reset()
             return
         }
-        val searchFrom = length - sampleRate * searchBackMs / 1000
+        firstOfVideo = false
+        // Look for the quietest moment in the last part, but never in the first half.
+        val searchFrom = length - minOf(sampleRate * searchBackMs / 1000, length / 2)
         var best = -1
         for (i in blockStart.indices) {
             if (blockStart[i] < searchFrom || i == 0) continue
@@ -385,5 +401,52 @@ class SpeedStats(private val keep: Int = 200) {
         if (list.isEmpty()) return null
         val sorted = list.sorted()
         return sorted[sorted.size / 2]
+    }
+}
+
+/** A language guess: a Whisper code such as "es", and how sure (0–1) among the languages considered. */
+class LanguageGuess(val code: String, val confidence: Float)
+
+/**
+ * Picks a language from Whisper's likelihoods. Limiting the choice to the languages you watch makes
+ * spotting far more reliable on a couple of seconds of speech. Contains no Android code.
+ */
+object LanguagePick {
+
+    /**
+     * [codes] and [probs] are Whisper's language codes and their likelihoods, in the same order.
+     * [allowed] is the set to choose from (empty = any). A language outside it is still chosen when
+     * its likelihood is at least [clearAt] (pass more than 1 to never do that).
+     */
+    fun pick(codes: Array<String>, probs: FloatArray, allowed: Collection<String>, clearAt: Float = 0.8f): LanguageGuess? {
+        val n = minOf(codes.size, probs.size)
+        if (n == 0) return null
+        var best = 0
+        for (i in 1 until n) if (probs[i] > probs[best]) best = i
+        if (allowed.isEmpty() || codes[best] in allowed) {
+            val inSet = if (allowed.isEmpty()) 1f else (0 until n).filter { codes[it] in allowed }.sumOf { probs[it].toDouble() }.toFloat()
+            return LanguageGuess(codes[best], if (inSet > 0f) (probs[best] / inSet).coerceAtMost(1f) else probs[best])
+        }
+        if (probs[best] >= clearAt) return LanguageGuess(codes[best], probs[best])
+        var pick = -1
+        var sum = 0f
+        for (i in 0 until n) {
+            if (codes[i] !in allowed) continue
+            sum += probs[i]
+            if (pick < 0 || probs[i] > probs[pick]) pick = i
+        }
+        if (pick < 0) return LanguageGuess(codes[best], probs[best])
+        return LanguageGuess(codes[pick], if (sum > 0f) probs[pick] / sum else 0f)
+    }
+
+    /** The Whisper code for one of the app's language codes ("nb" → "no", "fil" → "tl", …). */
+    fun whisperCode(code: String): String = when (code) {
+        "nb", "nn" -> "no"
+        "fil" -> "tl"
+        "jv" -> "jw"
+        "cmn", "yue" -> "zh"
+        "iw" -> "he"
+        "in" -> "id"
+        else -> code
     }
 }
