@@ -1,26 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Clip Captions</string>
-    <string name="intro">Shows what people say in videos as text, translated, in a floating box over TikTok or any other app. It reads the phone\'s own sound, so it works with AirPods and other headphones.</string>
-    <string name="label_source">Language in the videos</string>
-    <string name="mode_google">Google, word by word (recommended)</string>
-    <string name="google_checking">Checking whether this phone has Google speech recognition…</string>
-    <string name="google_recheck">Check this phone again</string>
+    <string name="intro">Live translated captions over TikTok, Reels and Shorts. Works with AirPods and headphones, and everything stays on your phone.</string>
+    <string name="label_source">How to listen</string>
+    <string name="mode_google">Instant: words appear as they\'re spoken (recommended)</string>
+    <string name="google_checking">Checking whether instant captions work on this phone…</string>
+    <string name="google_recheck">Check again</string>
     <string name="label_watch">Languages I watch</string>
     <string name="watch_choose">Choose languages</string>
-    <string name="google_note">Uses the Google speech recognition built into your phone. It\'s free, it writes the words as people speak, and the sound never leaves the phone. Each language and its translation download once, when you choose them, so captions never stop to download while you\'re scrolling. With more than one language, Clip Captions spots each video\'s language in a fraction of a second and tells Google, which is much quicker than Google working it out (this needs a one-off 31 MB download).</string>
-    <string name="auto_note">Whisper recognises any language. Tick the ones you watch and their translations download now, once, so captions never stop to download while you\'re scrolling. A language you haven\'t ticked still works: it\'s shown in English straight away if you read English, otherwise in its own words until its translation has downloaded in the background.</string>
+    <string name="google_note">Tick every language you watch. Each one downloads once, now, so nothing downloads while you\'re scrolling. With more than one ticked, the app works out each video\'s language for you.</string>
+    <string name="auto_note">Tick the languages you watch so their translations download now, once. Other languages still work: they show in their own words until their translation has downloaded.</string>
     <string name="version_label">Version %1$s</string>
     <string name="label_size">Caption size</string>
-    <string name="mode_auto">Whisper, any language detected automatically (slower)</string>
-    <string name="mode_live">Vosk, word by word (for phones without Google speech)</string>
-    <string name="auto_unavailable">Automatic detection can\'t run on this phone, so choose the language below.</string>
+    <string name="mode_auto">Any language: works it out for you (a few seconds behind)</string>
+    <string name="mode_live">Basic: one language (if Instant isn\'t available)</string>
+    <string name="auto_unavailable">“Any language” can\'t run on this phone.</string>
+    <string name="label_spoken">Language in the videos</string>
     <string name="source_description">Language spoken in the videos</string>
-    <string name="label_target">Show the words in</string>
+    <string name="label_target">Translate into</string>
     <string name="label_speed">Accuracy</string>
-    <string name="speed_note">Bigger speech models are more accurate but slower. Automatic times each one once on this phone and uses the most accurate one that keeps captions quick. It also steps down by itself if captions start falling behind.</string>
+    <string name="speed_note">More accurate needs a faster phone. Automatic picks the best your phone can keep up with.</string>
     <string name="start_captions">Start captions</string>
     <string name="how_title">How to use it</string>
-    <string name="how_steps">1. Choose how to listen (Google is the quickest), tick the languages you watch, and choose the language you want to read.\n2. Tap Start captions. The first time, allow “Display over other apps” and the sound permission, then wait for the downloads. They happen once, before captions start, never while a video is playing (Wi-Fi recommended).\n3. When Android asks what to share, choose “A single app” and pick the app you\'ll watch, such as TikTok. Your notifications stay visible. Only the sound is used, and nothing is saved.\n4. Play a video and the words appear in the floating box. Swipe to the next video and they clear. Drag the box up or down, or tap ✕ to stop.</string>
-    <string name="accuracy_note">Speech recognition and translation run on your phone. Automatic detection shows captions a few seconds after the speech; choosing the language yourself shows them word by word. Clear speech works best; loud music under the voice lowers accuracy.</string>
+    <string name="how_steps">1. Choose how to listen and tick the languages you watch.\n2. Choose the language to translate into.\n3. Tap Start captions. The first time, allow “Display over other apps” and the sound permission. Android calls it Microphone, but only your phone\'s own sound is used.\n4. When asked what to share, choose “A single app” and pick TikTok (or the app you\'re watching). Your notifications stay visible.\n5. Captions appear over your videos and clear when you swipe. Drag the box to move it, or tap ✕ to stop.</string>
+    <string name="accuracy_note">Nothing is recorded or uploaded. Clear speech works best; loud music under the voice makes captions less accurate.</string>
 </resources>

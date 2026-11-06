@@ -62,6 +62,8 @@ This key is only for test builds. Publishing on Google Play needs a separate pri
 
 ## Using it
 
+The app's main screen calls the three options **Instant** (Google's on-phone speech recognition, recommended), **Any language** (Whisper) and **Basic** (Vosk).
+
 1. Open Clip Captions. Choose **Google, word by word**, **Whisper**, or **Vosk**. For Google or Whisper, tap **Choose languages** and tick every language you watch (they download once, there and then). Choose the language you want to read. Leave **Accuracy** on Automatic unless captions lag (choose Fast) or you want to try a bigger model (Better or Best).
 2. Tap **Start captions**. The first time, allow **Display over other apps** and the sound permission (Android lists it as Microphone; the app doesn't use the microphone), then wait for the download.
 3. Android asks what to share. Choose **A single app** and pick the app you'll watch (for example TikTok). Your notifications stay visible, because Android hides notification content only while the whole screen is shared. Only the sound is used and nothing is saved, but Android shows its screen-sharing indicator while captions are on.

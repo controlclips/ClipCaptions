@@ -136,6 +136,15 @@
             android:textAppearance="?attr/textAppearanceBodySmall"
             android:visibility="gone" />
 
+        <TextView
+            android:id="@+id/sourceLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:labelFor="@id/sourceSpinner"
+            android:text="@string/label_spoken"
+            android:textAppearance="?attr/textAppearanceLabelLarge" />
+
         <Spinner
             android:id="@+id/sourceSpinner"
             android:layout_width="match_parent"

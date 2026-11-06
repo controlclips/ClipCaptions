@@ -111,7 +111,7 @@ object GoogleSpeech {
     /** Main thread. Finds out whether Google's on-phone recogniser can be used, and with which languages. */
     fun checkSupport(context: Context, done: (Support) -> Unit) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            done(Support.Unavailable("Needs Android 13 or newer."))
+            done(Support.Unavailable("It needs Android 13 or newer."))
             return
         }
         checkSupport33(context, done)
@@ -124,13 +124,13 @@ object GoogleSpeech {
             return
         }
         if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
-            done(Support.Unavailable("This phone doesn't have Google's on-device speech recognition."))
+            done(Support.Unavailable("This phone doesn't have the speech recognition it needs."))
             return
         }
         val recognizer = try {
             SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         } catch (e: Exception) {
-            done(Support.Unavailable("Google's on-device speech recognition couldn't start."))
+            done(Support.Unavailable("The phone's speech recognition couldn't start."))
             return
         }
         val main = Handler(Looper.getMainLooper())

@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modeLive: RadioButton
     private lateinit var autoUnavailable: TextView
     private lateinit var sourceSpinner: Spinner
+    private lateinit var sourceLabel: TextView
     private lateinit var targetSpinner: Spinner
     private lateinit var speedSection: View
     private lateinit var speedSpinner: Spinner
@@ -86,8 +87,8 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             fail(
-                "Clip Captions needs the Microphone permission. Android uses that permission for capturing " +
-                    "app sound too. The app doesn't listen to your microphone.",
+                "Clip Captions needs the sound permission (Android calls it Microphone). " +
+                    "Only your phone's own sound is used, never the microphone.",
             )
         }
     }
@@ -97,7 +98,7 @@ class MainActivity : AppCompatActivity() {
         val launch = pendingLaunch
         if (result.resultCode != Activity.RESULT_OK || data == null || launch == null) {
             if (launch?.auto == true) WhisperEngine.discardPreload()
-            fail("Captions didn't start because the sharing request was cancelled. Tap Start captions to try again.")
+            fail("Sharing was cancelled, so captions didn't start. Tap Start captions to try again.")
             return@registerForActivityResult
         }
         busy = false
@@ -122,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         modeLive = findViewById(R.id.modeLive)
         autoUnavailable = findViewById(R.id.autoUnavailable)
         sourceSpinner = findViewById(R.id.sourceSpinner)
+        sourceLabel = findViewById(R.id.sourceLabel)
         targetSpinner = findViewById(R.id.targetSpinner)
         speedSection = findViewById(R.id.speedSection)
         speedSpinner = findViewById(R.id.speedSpinner)
@@ -227,16 +229,10 @@ class MainActivity : AppCompatActivity() {
             speedText.visibility = View.GONE
             return
         }
-        val engine = when (prefs.getString("mode", null)) {
-            CaptionService.MODE_GOOGLE -> "Google"
-            CaptionService.MODE_AUTO -> "Whisper"
-            else -> "Vosk"
-        }
         val translation = prefs.getLong("translation_ms", -1L)
-        val samples = prefs.getInt("samples", 0)
         fun seconds(ms: Long) = String.format(java.util.Locale.UK, "%.1f s", ms / 1000.0)
-        val text = StringBuilder("Speed last time ($engine, $samples measurements): words appeared about ${seconds(words)} after people spoke")
-        if (translation >= 0) text.append(", and the translation about ${seconds(translation)} after the words")
+        val text = StringBuilder("Speed last time: words appeared ${seconds(words)} after people spoke")
+        if (translation >= 0) text.append(", translations ${seconds(translation)} after that")
         text.append('.')
         speedText.text = text
         speedText.visibility = View.VISIBLE
@@ -251,7 +247,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startCaptions() {
         if (!Settings.canDrawOverlays(this)) {
-            setStatus("Turn on “Allow display over other apps” for Clip Captions, then come back and tap Start captions.")
+            setStatus("Turn on “Display over other apps” for Clip Captions, then come back and tap Start captions.")
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             return
         }
@@ -279,7 +275,7 @@ class MainActivity : AppCompatActivity() {
             when (support) {
                 is GoogleSpeech.Support.Unavailable -> {
                     modeGoogle.isEnabled = false
-                    googleStatus.text = "Google speech recognition: not available. ${support.reason}"
+                    googleStatus.text = "Instant captions aren't available on this phone. ${support.reason}"
                     googleRecheck.visibility = View.VISIBLE
                     if (modeGroup.checkedRadioButtonId == R.id.modeGoogle) {
                         modeGroup.check(if (WhisperLib.available) R.id.modeAuto else R.id.modeLive)
@@ -287,8 +283,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 is GoogleSpeech.Support.Ready -> {
                     modeGoogle.isEnabled = !busy && !CaptionService.isRunning
-                    googleStatus.text = "Google speech recognition: ready on this phone. " +
-                        "${support.installed.size} languages downloaded, ${support.downloadable.size} more available."
+                    googleStatus.text = "Instant captions work on this phone."
                     if (preferGoogle) modeGroup.check(R.id.modeGoogle)
                 }
             }
@@ -331,9 +326,8 @@ class MainActivity : AppCompatActivity() {
         watchLanguages.text = when {
             chosen.isEmpty() -> "None yet."
             chosen.size == 1 -> names
-            WhisperLib.available -> "$names. Spots each video's language and switches by itself."
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> "$names. Switches between them by itself."
-            else -> "$names. Automatic switching needs Android 14, so it listens for ${GoogleSpeech.displayName(chosen.first())}."
+            WhisperLib.available || Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> names
+            else -> "$names. Switching between them needs Android 14, so it listens for ${GoogleSpeech.displayName(chosen.first())}."
         }
     }
 
@@ -397,7 +391,7 @@ class MainActivity : AppCompatActivity() {
         progress.isIndeterminate = true
         val problems = ArrayList<String>()
         GoogleSpeech.downloadAll(this, toFetch, { tag, index, total ->
-            setStatus("Downloading ${GoogleSpeech.displayName(tag)} for Google speech, ${index + 1} of $total (first time only)…")
+            setStatus("Downloading ${GoogleSpeech.displayName(tag)}, ${index + 1} of $total (first time only)…")
         }) { failedSpeech ->
             problems += failedSpeech.map { GoogleSpeech.displayName(it) }
             downloadTranslations(tags.map { GoogleSpeech.codeOf(it) }) { failedTranslation ->
@@ -451,7 +445,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAutoLanguages() {
         val chosen = chosenAutoLanguages()
         watchLanguages.text = if (chosen.isEmpty()) {
-            "None ticked. Any language still works, but its translation downloads the first time it's heard."
+            "None yet. Any language still works."
         } else {
             chosen.joinToString(", ") { Languages.nameFor(it) }
         }
@@ -504,12 +498,12 @@ class MainActivity : AppCompatActivity() {
     /** Google mode: make sure your languages are downloaded (instant after the first time), then share the sound. */
     private fun prepareGoogle() {
         if (googleSupport !is GoogleSpeech.Support.Ready) {
-            fail("Google speech recognition isn't ready on this phone. Choose another option.")
+            fail("Instant captions aren't available on this phone. Choose another option.")
             return
         }
         val chosen = chosenGoogleLanguages()
         if (chosen.isEmpty()) {
-            fail("Tap Choose languages and tick the languages in the videos first.")
+            fail("Tap Choose languages and tick the languages you watch first.")
             return
         }
         downloadGoogleLanguages(chosen) {
@@ -531,14 +525,14 @@ class MainActivity : AppCompatActivity() {
         }
         progress.visibility = View.VISIBLE
         progress.isIndeterminate = true
-        setStatus("Downloading the language spotter (31 MB, first time only)…")
+        setStatus("Downloading the language detector (31 MB, first time only)…")
         io.execute {
             val ok = try {
                 WhisperModels.ensure(this, item) { percent ->
                     runOnUiThread {
                         progress.isIndeterminate = false
                         progress.progress = percent
-                        setStatus("Downloading the language spotter (31 MB, first time only)… $percent%")
+                        setStatus("Downloading the language detector (31 MB, first time only)… $percent%")
                     }
                 }
                 // Under 1 MB: tells speech from music and noise, so spotting isn't fooled by them.
@@ -548,7 +542,7 @@ class MainActivity : AppCompatActivity() {
                 false
             }
             runOnUiThread {
-                if (!ok) setStatus("Couldn't download the language spotter, so Google will detect the language (slower).")
+                if (!ok) setStatus("Couldn't download the language detector, so working out each video's language will be slower.")
                 done()
             }
         }
@@ -584,7 +578,7 @@ class MainActivity : AppCompatActivity() {
         val watched = chosenAutoLanguages()
         progress.visibility = View.VISIBLE
         progress.isIndeterminate = true
-        setStatus("Getting automatic detection ready…")
+        setStatus("Getting ready…")
         io.execute {
             try {
                 val total = plan.downloads.size
@@ -594,7 +588,7 @@ class MainActivity : AppCompatActivity() {
                             runOnUiThread {
                                 progress.isIndeterminate = false
                                 progress.progress = percent
-                                setStatus("Downloading the ${item.label}, ${index + 1} of $total (first time only)… $percent%")
+                                setStatus("Downloading, ${index + 1} of $total (first time only)… $percent%")
                             }
                         }
                     }
@@ -615,7 +609,7 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    fail("Couldn't download the automatic detection files: ${e.message}. Check your internet connection and tap Start captions again.")
+                    fail("The download didn't finish. Check your internet connection and tap Start captions again.")
                 }
             }
         }
@@ -627,7 +621,7 @@ class MainActivity : AppCompatActivity() {
         val caption = selectedCaption()
         progress.visibility = View.VISIBLE
         progress.isIndeterminate = true
-        setStatus("Getting the ${spoken.name} speech model ready…")
+        setStatus("Getting ${spoken.name} ready…")
         io.execute {
             try {
                 val modelDir = VoskModels.installed(this, spoken.voskModel)
@@ -635,13 +629,13 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             progress.isIndeterminate = false
                             progress.progress = percent
-                            setStatus("Downloading the ${spoken.name} speech model (first time only)… $percent%")
+                            setStatus("Downloading ${spoken.name} (first time only)… $percent%")
                         }
                     }
                 runOnUiThread { prepareTranslation(spoken, caption, modelDir.absolutePath) }
             } catch (e: Exception) {
                 runOnUiThread {
-                    fail("Couldn't download the ${spoken.name} speech model: ${e.message}. Check your internet connection and tap Start captions again.")
+                    fail("The ${spoken.name} download didn't finish. Check your internet connection and tap Start captions again.")
                 }
             }
         }
@@ -666,7 +660,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         progress.isIndeterminate = true
-        setStatus("Getting ${spoken.name} → ${caption.name} translation ready (first time only)…")
+        setStatus("Downloading the ${spoken.name} → ${caption.name} translation (first time only)…")
         val translator = Translation.getClient(
             TranslatorOptions.Builder().setSourceLanguage(from).setTargetLanguage(to).build(),
         )
@@ -678,7 +672,7 @@ class MainActivity : AppCompatActivity() {
             }
             .addOnFailureListener { e ->
                 translator.close()
-                fail("Couldn't download the translation files: ${e.message}. Check your internet connection and tap Start captions again.")
+                fail("The translation download didn't finish. Check your internet connection and tap Start captions again.")
             }
     }
 
@@ -791,33 +785,29 @@ class MainActivity : AppCompatActivity() {
             showAutoLanguages()
         }
         sourceSpinner.visibility = if (google || auto) View.GONE else View.VISIBLE
+        sourceLabel.visibility = sourceSpinner.visibility
         speedSection.visibility = if (auto) View.VISIBLE else View.GONE
     }
 
     private fun describeChoice(): String {
         val caption = selectedCaption()
         if (isGoogleMode()) {
-            return "Google writes the words as people speak and Clip Captions translates them into ${caption.name}, " +
-                "all on your phone and free."
+            return "Words appear as people speak, translated into ${caption.name}."
         }
         if (isAutoMode()) {
-            return if (caption.code == "en") {
-                "Detects the language of each video and shows the words in English."
-            } else {
-                "Detects the language of each video and translates it into ${caption.name}."
-            }
+            return "Works out each video's language and translates it into ${caption.name}."
         }
         val spoken = selectedSpoken()
         return if (spoken.code == caption.code) {
-            "Shows ${spoken.name} speech as ${spoken.name} text. Pick another language under “Show the words in” to translate."
+            "Shows ${spoken.name} as ${spoken.name} text. Choose another language under “Translate into” to translate it."
         } else {
-            "Translates ${spoken.name} speech into ${caption.name}, word by word."
+            "Translates ${spoken.name} into ${caption.name} as people speak."
         }
     }
 
     private fun runningMessage() =
-        "Captions are on. Play a TikTok and the words appear in the floating box. They clear when you swipe to " +
-            "the next video. Drag the box to move it, or tap ✕ to stop."
+        "Captions are on. Play a video and the words appear in the floating box. Swipe and they clear. " +
+            "Drag the box to move it, or tap ✕ to stop."
 
     private fun refreshUi() {
         val running = CaptionService.isRunning
