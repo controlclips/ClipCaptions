@@ -88,8 +88,16 @@ class CaptionService : Service() {
         // Empty means any language.
         const val EXTRA_WATCHED_WHISPER = "watchedWhisper"
 
-        // Speech collected before spotting a video's language: enough to be reliable, short enough to be quick.
-        private const val SPOT_SAMPLES = 16000 * 18 / 10 // 1.8 seconds
+        // The speech detector for spotting (Google with several languages).
+        const val EXTRA_SPOTTER_VAD = "spotterVad"
+
+        // Spotting a video's language: first try after 1.2 seconds of sound, then every 0.6 seconds
+        // until it's sure, for up to 6 seconds.
+        private const val SPOT_FIRST = 16000 * 12 / 10
+        private const val SPOT_STEP = 16000 * 6 / 10
+        private const val SPOT_MAX = 16000 * 6
+        // At least this much actual speech (not music or noise) is needed to spot a language.
+        private const val SPOT_MIN_SPEECH = 16000 * 6 / 10
 
         const val MODE_AUTO = "auto"
         const val MODE_LIVE = "live"
@@ -160,6 +168,10 @@ class CaptionService : Service() {
     private val spotterThread = Executors.newSingleThreadExecutor()
     private var googleTags: List<String> = emptyList()
     private var spotterPath: String? = null
+    private var spotterVad: String? = null
+    // The video whose language has been settled, and whether spotting is under way.
+    private val spotDecided = AtomicInteger(-1)
+    private val spotBusy = java.util.concurrent.atomic.AtomicBoolean(false)
     private var watchedWhisper: List<String> = emptyList()
 
     // Speed readout: when people started speaking (set by the capture thread), and the delays seen.
@@ -253,6 +265,7 @@ class CaptionService : Service() {
         isRunning = true
         targetCode = command.getStringExtra(EXTRA_TARGET) ?: "en"
         spotterPath = command.getStringExtra(EXTRA_SPOTTER_MODEL)
+        spotterVad = command.getStringExtra(EXTRA_SPOTTER_VAD)
         watchedWhisper = command.getStringArrayListExtra(EXTRA_WATCHED_WHISPER).orEmpty()
         loadTranslationPacks()
         val watched = command.getStringArrayListExtra(EXTRA_WATCHED).orEmpty()
@@ -283,7 +296,7 @@ class CaptionService : Service() {
             google = captioner
             if (spotHere && path != null) {
                 spotterThread.execute {
-                    val loaded = LanguageSpotter.load(path, spotterThreads())
+                    val loaded = LanguageSpotter.load(path, spotterThreads(), spotterVad)
                     if (loaded == null) {
                         main.post { google?.letGoogleDetect() }
                     } else if (!keepRunning) {
@@ -467,6 +480,8 @@ class CaptionService : Service() {
         } else if (autoMode) {
             lastLanguage = ""
             pendingChunks.clear()
+            // Stop working on the old video's speech, so the new video's comes through sooner.
+            if (WhisperLib.available) WhisperLib.nativeCancel()
             box.setLabel(autoStartLabel())
         } else {
             liveGeneration++
@@ -601,49 +616,73 @@ class CaptionService : Service() {
      * spotter's thread. Once per video.
      */
     private inner class SpotCollector {
-        private val samples = FloatArray(SPOT_SAMPLES)
+        private val samples = FloatArray(SPOT_MAX)
         private var length = 0
         private var forVideo = -1
-        private var done = false
+        private var nextTry = SPOT_FIRST
+        private var lastSent = false
 
         fun add(buffer: ByteArray, read: Int, loud: Boolean) {
             val now = video.get()
             if (now != forVideo) {
                 forVideo = now
                 length = 0
-                done = false
+                nextTry = SPOT_FIRST
+                lastSent = false
             }
-            if (done || (length == 0 && !loud)) return // Wait for the sound to start.
+            if (spotDecided.get() == now || lastSent) return
+            if (length == 0 && !loud) return // Wait for the sound to start.
             var i = 0
             while (i + 1 < read && length < samples.size) {
                 val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
                 samples[length++] = sample / 32768f
                 i += 2
             }
-            if (length < samples.size) return
-            done = true
-            val speech = samples.copyOf()
-            val videoNumber = forVideo
+            if (length < nextTry || !spotBusy.compareAndSet(false, true)) return
+            // The newest few seconds: if music came first, the speech is in there by now.
+            val last = length >= samples.size
+            val window = samples.copyOfRange(maxOf(0, length - LanguageSpotter.MAX_SAMPLES), length)
+            nextTry = length + SPOT_STEP
+            lastSent = last
             try {
-                spotterThread.execute { spotGoogleLanguage(speech, videoNumber) }
+                spotterThread.execute { spotGoogleLanguage(window, now, last) }
             } catch (e: java.util.concurrent.RejectedExecutionException) {
-                // Captions are stopping.
+                spotBusy.set(false) // Captions are stopping.
             }
         }
     }
 
-    /** Spotter thread: which of your languages this video is in. */
-    private fun spotGoogleLanguage(speech: FloatArray, videoNumber: Int) {
-        val sp = spotter ?: return
-        if (videoNumber != video.get()) return
-        val allowed = googleTags.map { LanguagePick.whisperCode(GoogleSpeech.codeOf(it)) }
-        val guess = sp.detect(speech, allowed, othersIfClear = false) ?: return
-        main.post { onGoogleLanguageSpotted(guess, videoNumber) }
+    /**
+     * Spotter thread: which of your languages this video is in. Only the speech is used, so music
+     * and background noise don't count. Decides straight away when it's sure, otherwise tries again
+     * with more speech.
+     */
+    private fun spotGoogleLanguage(window: FloatArray, videoNumber: Int, last: Boolean) {
+        try {
+            val sp = spotter ?: return
+            if (videoNumber != video.get() || spotDecided.get() == videoNumber) return
+            val speech = sp.speechOnly(window)
+            if (speech != null && speech.size < SPOT_MIN_SPEECH) {
+                // Mostly music or noise so far: wait for more speech.
+                if (last) spotDecided.set(videoNumber)
+                return
+            }
+            val audio = speech ?: window
+            val allowed = googleTags.map { LanguagePick.whisperCode(GoogleSpeech.codeOf(it)) }
+            val guess = sp.detect(audio, allowed, othersIfClear = false) ?: return
+            // Very sure on a little speech, or fairly sure on more.
+            val needed = if (audio.size < SAMPLE_RATE * 3 / 2) 0.85f else 0.7f
+            if (guess.confidence < needed && !last) return
+            spotDecided.set(videoNumber)
+            main.post { onGoogleLanguageSpotted(guess, videoNumber) }
+        } finally {
+            spotBusy.set(false)
+        }
     }
 
     /** Main thread: if the video isn't in the language Google is listening for, switch straight away. */
     private fun onGoogleLanguageSpotted(guess: LanguageGuess, videoNumber: Int) {
-        if (!googleMode || videoNumber != video.get() || guess.confidence < 0.6f) return
+        if (!googleMode || videoNumber != video.get() || guess.confidence < 0.7f) return
         val captioner = google ?: return
         val tag = googleTags.firstOrNull { LanguagePick.whisperCode(GoogleSpeech.codeOf(it)) == guess.code } ?: return
         if (tag == captioner.language) return
@@ -942,7 +981,13 @@ class CaptionService : Service() {
                 // Once a video's language is settled, Whisper is told it rather than detecting it every chunk.
                 // Until then, the small model spots it for each chunk.
                 var spotted: LanguageGuess? = null
-                val language = languageLock.locked ?: wsSpotter?.detect(chunk.samples, allowed, othersIfClear = true)?.also {
+                val spotAudio = if (wsSpotter != null && session.vad != 0L) {
+                    // Spot on the speech alone, so background music doesn't sway it.
+                    WhisperLib.nativeSpeechOnly(session.vad, chunk.samples)?.takeIf { it.size >= SPOT_MIN_SPEECH } ?: chunk.samples
+                } else {
+                    chunk.samples
+                }
+                val language = languageLock.locked ?: wsSpotter?.detect(spotAudio, allowed, othersIfClear = true)?.also {
                     spotted = it
                     languageLock.record(it.code, it.confidence)
                 }?.code

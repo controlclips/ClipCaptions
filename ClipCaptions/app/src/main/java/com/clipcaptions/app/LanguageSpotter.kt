@@ -10,6 +10,8 @@ class LanguageSpotter private constructor(
     private val handle: Long,
     private val ownsModel: Boolean,
     private val threads: Int,
+    // The speech detector, so music and noise are left out before spotting (0 if there isn't one).
+    private val vad: Long = 0L,
 ) {
     companion object {
         /** About 3.8 seconds of Whisper's 30-second window: plenty for spotting, and quick. */
@@ -21,8 +23,8 @@ class LanguageSpotter private constructor(
         @Volatile
         private var codes: Array<String>? = null
 
-        /** Loads the small model for spotting. Blocking. Null if it couldn't be loaded. */
-        fun load(modelPath: String, threads: Int): LanguageSpotter? {
+        /** Loads the small model (and the speech detector, if given) for spotting. Blocking. Null if it couldn't be loaded. */
+        fun load(modelPath: String, threads: Int, vadPath: String? = null): LanguageSpotter? {
             if (!WhisperLib.available) return null
             val handle = WhisperLib.nativeInit(modelPath)
             if (handle == 0L) return null
@@ -30,7 +32,8 @@ class LanguageSpotter private constructor(
                 WhisperLib.nativeFree(handle)
                 return null
             }
-            return LanguageSpotter(handle, ownsModel = true, threads = threads)
+            val vad = vadPath?.let { WhisperLib.nativeInitVad(it) } ?: 0L
+            return LanguageSpotter(handle, ownsModel = true, threads = threads, vad = vad)
         }
 
         /** Spots with a model that's already loaded for captions (when it's the small model anyway). */
@@ -49,7 +52,12 @@ class LanguageSpotter private constructor(
         return LanguagePick.pick(names, probs, allowed, if (othersIfClear) 0.8f else 2f)
     }
 
+    /** The speech in [samples] with music and noise between words left out, or null with no speech detector. */
+    fun speechOnly(samples: FloatArray): FloatArray? =
+        if (vad == 0L) null else WhisperLib.nativeSpeechOnly(vad, samples)
+
     fun close() {
         if (ownsModel) WhisperLib.nativeFree(handle)
+        if (vad != 0L) WhisperLib.nativeFreeVad(vad)
     }
 }

@@ -524,7 +524,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun downloadSpotter(done: () -> Unit) {
         val item = WhisperModels.fast
-        if (WhisperModels.isDownloaded(this, item)) {
+        val detector = WhisperModels.speechDetector
+        if (WhisperModels.isDownloaded(this, item) && WhisperModels.isDownloaded(this, detector)) {
             done()
             return
         }
@@ -540,6 +541,8 @@ class MainActivity : AppCompatActivity() {
                         setStatus("Downloading the language spotter (31 MB, first time only)… $percent%")
                     }
                 }
+                // Under 1 MB: tells speech from music and noise, so spotting isn't fooled by them.
+                WhisperModels.ensure(this, detector) {}
                 true
             } catch (e: Exception) {
                 false
@@ -705,6 +708,12 @@ class MainActivity : AppCompatActivity() {
             putExtra(CaptionService.EXTRA_TARGET, selectedCaption().code)
             putStringArrayListExtra(CaptionService.EXTRA_WATCHED, ArrayList(launch.watched))
             launch.spotterModel?.let { putExtra(CaptionService.EXTRA_SPOTTER_MODEL, it) }
+            if (WhisperModels.isDownloaded(this@MainActivity, WhisperModels.speechDetector)) {
+                putExtra(
+                    CaptionService.EXTRA_SPOTTER_VAD,
+                    WhisperModels.file(this@MainActivity, WhisperModels.speechDetector).absolutePath,
+                )
+            }
             if (launch.auto) {
                 putStringArrayListExtra(
                     CaptionService.EXTRA_WATCHED_WHISPER,

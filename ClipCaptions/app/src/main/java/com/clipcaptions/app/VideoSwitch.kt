@@ -231,16 +231,22 @@ class LeftoverWords {
     private var latest = ""
     private var cutWords = 0
     private var cutChars = 0
+    // How the old video's sentence began, to tell it apart from a new sentence.
+    private var cutStart: List<String> = emptyList()
+    private var cutStartChars = ""
 
     /** Call when you move on to another video. */
     fun cut() {
         val heard = latest.trim()
         if (heard.isEmpty()) return
         if (heard.contains(' ')) {
-            cutWords = words(heard).size
+            val all = words(heard)
+            cutWords = all.size
+            cutStart = all.take(2).map { plain(it) }
             cutChars = 0
         } else {
             cutChars = heard.length
+            cutStartChars = heard.take(2)
             cutWords = 0
         }
     }
@@ -262,6 +268,8 @@ class LeftoverWords {
         latest = ""
         cutWords = 0
         cutChars = 0
+        cutStart = emptyList()
+        cutStartChars = ""
     }
 
     private fun strip(text: String): String {
@@ -269,12 +277,42 @@ class LeftoverWords {
         return when {
             cutWords > 0 -> {
                 val all = words(t)
-                if (all.size <= cutWords) "" else all.drop(cutWords).joinToString(" ")
+                if (startsDifferently(all)) {
+                    // The recogniser has begun a new sentence (the new video's) without saying the old
+                    // one had finished: nothing in it belongs to the old video.
+                    cutWords = 0
+                    cutStart = emptyList()
+                    t
+                } else if (all.size <= cutWords) {
+                    ""
+                } else {
+                    all.drop(cutWords).joinToString(" ")
+                }
             }
-            cutChars > 0 -> if (t.length <= cutChars) "" else t.substring(cutChars).trim()
+            cutChars > 0 -> {
+                val n = minOf(cutStartChars.length, t.length)
+                if (n > 0 && t.substring(0, n) != cutStartChars.substring(0, n)) {
+                    cutChars = 0
+                    cutStartChars = ""
+                    t
+                } else if (t.length <= cutChars) {
+                    ""
+                } else {
+                    t.substring(cutChars).trim()
+                }
+            }
             else -> t
         }
     }
+
+    private fun startsDifferently(all: List<String>): Boolean {
+        val n = minOf(cutStart.size, all.size)
+        for (i in 0 until n) if (plain(all[i]) != cutStart[i]) return true
+        return false
+    }
+
+    /** A word without capitals or punctuation, as recognisers add those when a sentence finishes. */
+    private fun plain(word: String) = word.lowercase().filter { it.isLetterOrDigit() }
 
     private fun words(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
 }

@@ -629,7 +629,11 @@ class GoogleCaptioner(
 
         override fun onSegmentResults(segmentResults: Bundle) {
             val heard = texts(segmentResults)
-            if (heard.isEmpty()) return
+            if (heard.isEmpty()) {
+                // The sentence ended with nothing to show; the next one starts clean.
+                leftover.reset()
+                return
+            }
             val text = leftover.onFinal(heard)
             if (text.isNotEmpty() && showable()) events.onFinal(text, currentLanguage)
         }
@@ -638,6 +642,7 @@ class GoogleCaptioner(
             // Recognisers without continuous sessions end after each sentence.
             val heard = texts(results)
             val text = if (heard.isEmpty()) "" else leftover.onFinal(heard)
+            if (heard.isEmpty()) leftover.reset()
             if (text.isNotEmpty() && showable()) events.onFinal(text, currentLanguage)
             if (session != null) {
                 endSession(cancel = false)
