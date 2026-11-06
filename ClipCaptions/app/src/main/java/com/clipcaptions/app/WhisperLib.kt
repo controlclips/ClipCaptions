@@ -78,6 +78,17 @@ object WhisperLib {
     /** Whisper's language codes ("en", "es", …), in the order [nativeDetectLanguage] uses. */
     @JvmStatic
     external fun nativeLanguageCodes(): Array<String>?
+
+    /** Stops a transcription under way, because you've moved to another video. Any thread. */
+    @JvmStatic
+    external fun nativeCancel()
+
+    /**
+     * Only the parts of [samples] that hold speech, joined up (empty if none), using the speech
+     * detector [handle]. Null if there's no detector.
+     */
+    @JvmStatic
+    external fun nativeSpeechOnly(handle: Long, samples: FloatArray): FloatArray?
 }
 
 object CpuFeatures {

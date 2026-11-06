@@ -1,5 +1,6 @@
 // Bridge between the app (Kotlin) and whisper.cpp.
 #include <jni.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,17 @@ static void read_log(enum ggml_log_level level, const char *text, void *user_dat
     const char *p = strstr(found, "(p = ");
     if (p != NULL) last_language_confidence = strtof(p + 5, NULL);
 }
+
+// Bumped when you swipe to another video, so a transcription still working on the old one stops.
+static volatile int cancel_generation = 0;
+
+static bool cancelled(void *data) {
+    return cancel_generation != (int) (intptr_t) data;
+}
+
+// Most text Whisper may write per segment. Our chunks are a few seconds, so this is plenty for real
+// speech, and stops Whisper from running on (repeating itself) over music and noise.
+#define MAX_TOKENS 64
 
 static struct whisper_context *as_context(jlong handle) {
     return (struct whisper_context *) (intptr_t) handle;
@@ -97,6 +109,9 @@ Java_com_clipcaptions_app_WhisperLib_nativeTranscribe(
 
     // Speech detection is done separately (nativeHasSpeech), on one thread.
     params.vad = false;
+    params.max_tokens = MAX_TOKENS;
+    params.abort_callback = cancelled;
+    params.abort_callback_user_data = (void *) (intptr_t) cancel_generation;
 
     jsize count = (*env)->GetArrayLength(env, samples);
     jfloat *audio = (*env)->GetFloatArrayElements(env, samples, NULL);
@@ -302,4 +317,61 @@ Java_com_clipcaptions_app_WhisperLib_nativeLanguageCodes(JNIEnv *env, jclass cla
         (*env)->DeleteLocalRef(env, value);
     }
     return codes;
+}
+
+// Stops any transcription under way (its result is no longer wanted: you've moved to another video).
+JNIEXPORT void JNICALL
+Java_com_clipcaptions_app_WhisperLib_nativeCancel(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    cancel_generation++;
+}
+
+// Only the parts of the sound that hold speech (with a little either side), joined up, so music and
+// noise between words don't confuse language spotting. Empty if there's no speech; null if there's
+// no speech detector (then use all of the sound).
+#define SPEECH_PAD 1600 // 0.1 s
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_clipcaptions_app_WhisperLib_nativeSpeechOnly(JNIEnv *env, jclass clazz, jlong handle, jfloatArray samples) {
+    (void) clazz;
+    struct whisper_vad_context *vctx = (struct whisper_vad_context *) (intptr_t) handle;
+    if (vctx == NULL || samples == NULL) return NULL;
+
+    jsize count = (*env)->GetArrayLength(env, samples);
+    jfloat *audio = (*env)->GetFloatArrayElements(env, samples, NULL);
+    if (audio == NULL) return NULL;
+
+    struct whisper_vad_segments *segments =
+            whisper_vad_segments_from_samples(vctx, whisper_vad_default_params(), audio, count);
+    if (segments == NULL) {
+        (*env)->ReleaseFloatArrayElements(env, samples, audio, JNI_ABORT);
+        return NULL;
+    }
+
+    float *speech = malloc(sizeof(float) * (count > 0 ? count : 1));
+    jsize length = 0;
+    jsize done_to = 0; // Sound before this has already been copied.
+    if (speech != NULL) {
+        int n = whisper_vad_segments_n_segments(segments);
+        for (int i = 0; i < n; i++) {
+            // Segment times are in centiseconds: 160 samples each.
+            jsize from = (jsize) (whisper_vad_segments_get_segment_t0(segments, i) * 160.0f) - SPEECH_PAD;
+            jsize to = (jsize) (whisper_vad_segments_get_segment_t1(segments, i) * 160.0f) + SPEECH_PAD;
+            if (from < done_to) from = done_to;
+            if (to > count) to = count;
+            if (to <= from) continue;
+            memcpy(speech + length, audio + from, sizeof(float) * (size_t) (to - from));
+            length += to - from;
+            done_to = to;
+        }
+    }
+    whisper_vad_free_segments(segments);
+    (*env)->ReleaseFloatArrayElements(env, samples, audio, JNI_ABORT);
+    if (speech == NULL) return NULL;
+
+    jfloatArray result = (*env)->NewFloatArray(env, length);
+    if (result != NULL && length > 0) (*env)->SetFloatArrayRegion(env, result, 0, length, speech);
+    free(speech);
+    return result;
 }
