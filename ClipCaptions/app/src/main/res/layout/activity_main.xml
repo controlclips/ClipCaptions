@@ -244,6 +244,15 @@
             android:textAppearance="?attr/textAppearanceBodySmall"
             android:visibility="gone" />
 
+        <Button
+            android:id="@+id/phrasesButton"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:minHeight="52dp"
+            android:text="@string/my_phrases" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -265,5 +274,28 @@
             android:layout_marginTop="20dp"
             android:text="@string/accuracy_note"
             android:textAppearance="?attr/textAppearanceBodySmall" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/setupButton"
+                style="?attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/setup_guide" />
+
+            <Button
+                android:id="@+id/reportButton"
+                style="?attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/report_problem" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

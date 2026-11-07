@@ -23,5 +23,8 @@
     <string name="start_captions">Start captions</string>
     <string name="how_title">How to use it</string>
     <string name="how_steps">1. Choose how to listen and tick the languages you watch.\n2. Choose the language to translate into.\n3. Tap Start captions. The first time, allow “Display over other apps” and the sound permission. Android calls it Microphone, but only your phone\'s own sound is used.\n4. When asked what to share, choose “A single app” and pick TikTok (or the app you\'re watching). Your notifications stay visible.\n5. Captions appear over your videos and clear when you swipe. Drag the box to move it, or tap ✕ to stop.</string>
+    <string name="my_phrases">My phrases</string>
+    <string name="setup_guide">Setup guide</string>
+    <string name="report_problem">Report a problem</string>
     <string name="accuracy_note">Nothing is recorded or uploaded. Clear speech works best; loud music under the voice makes captions less accurate.</string>
 </resources>

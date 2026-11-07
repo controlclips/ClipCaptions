@@ -288,6 +288,7 @@ class GoogleCaptioner(
     private var recognizer: SpeechRecognizer? = null
     private var currentLanguage = languageTag
     private var stopped = false
+    private var paused = false
     private var sessionNumber = 0
 
     @Volatile
@@ -430,7 +431,7 @@ class GoogleCaptioner(
      * this video (up to 3 seconds back) so its first words are recognised in the right language.
      */
     fun switchTo(tag: String) {
-        if (stopped || tag == currentLanguage) return
+        if (stopped || paused || tag == currentLanguage) return
         currentLanguage = tag
         synchronized(gap) {
             val replay = recent.toList().takeLast(minOf(blocksSinceVideo, RECENT_BLOCKS))
@@ -452,7 +453,33 @@ class GoogleCaptioner(
             events.onProblem("Google's on-device speech recognition couldn't start.")
             return
         }
-        main.postDelayed({ if (!stopped && session == null) startSession() }, 30L)
+        main.postDelayed({ if (!stopped && !paused && session == null) startSession() }, 30L)
+    }
+
+    /**
+     * Main thread. Stops listening to save battery while nothing is playing. Sound keeps coming in
+     * (the last second is kept), so [resume] doesn't miss the first words.
+     */
+    fun pause() {
+        if (stopped || paused) return
+        paused = true
+        endSession(cancel = true)
+        // A fresh recogniser on resume, so nothing from before the pause can arrive late.
+        recognizer?.destroy()
+        recognizer = null
+    }
+
+    /** Main thread. Sound is playing again: start listening straight away. */
+    fun resume() {
+        if (stopped || !paused) return
+        paused = false
+        recognizer = createRecognizer()
+        if (recognizer == null) {
+            stopped = true
+            events.onProblem("Google's on-device speech recognition couldn't start.")
+            return
+        }
+        if (session == null) startSession()
     }
 
     /** Main thread. The app couldn't spot languages itself after all: let Google detect them. */
@@ -487,7 +514,7 @@ class GoogleCaptioner(
 
     @SuppressLint("MissingPermission")
     private fun startSession() {
-        if (stopped) return
+        if (stopped || paused) return
         val rec = recognizer ?: return
         val s = try {
             Session(++sessionNumber)
@@ -583,7 +610,7 @@ class GoogleCaptioner(
             return
         }
         // The sound in between is kept (see feed), so restarting quickly loses nothing.
-        main.postDelayed({ if (!stopped && session == null) startSession() }, 50L)
+        main.postDelayed({ if (!stopped && !paused && session == null) startSession() }, 50L)
     }
 
     /** Something went wrong; start again with a fresh recogniser, unless it keeps happening. */
@@ -599,7 +626,7 @@ class GoogleCaptioner(
         }
         recognizer?.destroy()
         recognizer = createRecognizer()
-        main.postDelayed({ if (!stopped && session == null) startSession() }, 400L)
+        main.postDelayed({ if (!stopped && !paused && session == null) startSession() }, 400L)
     }
 
     private fun texts(bundle: Bundle?): String =
@@ -667,13 +694,13 @@ class GoogleCaptioner(
         }
 
         override fun onError(error: Int) {
-            if (stopped) return
+            if (stopped || paused) return
             val hadSession = session != null
             endSession(cancel = false)
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> restartQuietly()
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
-                    main.postDelayed({ if (!stopped && session == null) startSession() }, 500L)
+                    main.postDelayed({ if (!stopped && !paused && session == null) startSession() }, 500L)
                 SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> {
                     stopped = true
                     events.onProblem(

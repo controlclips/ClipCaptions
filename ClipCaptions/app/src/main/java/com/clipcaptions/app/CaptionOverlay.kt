@@ -26,6 +26,9 @@ import android.widget.TextView
  * [onScreenTouched] is called when you touch the screen anywhere outside the box (Android only
  * says that a touch happened, not where), which helps spot swipes to the next video.
  *
+ * ☆ saves the words on screen (and their translation) through [onSave], which returns false if
+ * they were already saved.
+ *
  * The box remembers where you last dragged it, and uses the caption size chosen in the app.
  */
 class CaptionOverlay(
@@ -33,6 +36,7 @@ class CaptionOverlay(
     initialLabel: String,
     private val onClose: () -> Unit,
     private val onScreenTouched: () -> Unit,
+    private val onSave: (original: String, translated: String?) -> Boolean,
 ) {
 
     private class Line(val id: Int, val original: String, val awaiting: Boolean, var translated: String?)
@@ -91,6 +95,15 @@ class CaptionOverlay(
             letterSpacing = 0.08f
             typeface = Typeface.DEFAULT_BOLD
         }
+        val saveView = TextView(context).apply {
+            text = "☆"
+            setTextColor(white)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            setPadding(dp(12f), dp(6f), dp(8f), dp(6f))
+            contentDescription = "Save this phrase"
+            isClickable = true
+        }
+        saveView.setOnClickListener { saveCurrent(saveView) }
         val closeView = TextView(context).apply {
             text = "✕"
             setTextColor(white)
@@ -101,6 +114,10 @@ class CaptionOverlay(
             setOnClickListener { onClose() }
         }
         header.addView(labelView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(
+            saveView,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT),
+        )
         header.addView(
             closeView,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT),
@@ -186,6 +203,28 @@ class CaptionOverlay(
         } catch (ignored: Exception) {
         }
         shown = false
+    }
+
+    /** Saves the newest words on screen (the sentence being spoken, or else the last line). */
+    private fun saveCurrent(star: TextView) {
+        val original: String
+        val translated: String?
+        if (liveOriginal.isNotEmpty()) {
+            original = liveOriginal
+            translated = liveTranslated
+        } else {
+            val last = lines.lastOrNull()
+            if (last == null) {
+                flashHint("Nothing to save yet. Tap ☆ while words are on screen.")
+                return
+            }
+            original = last.original
+            translated = last.translated
+        }
+        val saved = onSave(original, translated)
+        flashHint(if (saved) "Saved to My phrases." else "Already saved.")
+        star.text = "★"
+        star.postDelayed({ star.text = "☆" }, 1200L)
     }
 
     /** The small heading, such as "SPANISH → ENGLISH". */

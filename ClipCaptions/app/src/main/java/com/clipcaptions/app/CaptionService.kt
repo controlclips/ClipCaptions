@@ -108,6 +108,10 @@ class CaptionService : Service() {
         private const val SAMPLE_RATE = 16000
         private const val MAX_WORDS_PER_LINE = 16
         private const val SILENCE_WARNING_MS = 15_000L
+        // Battery: stop listening after a minute with nothing playing (starting again the moment sound
+        // comes back), and turn captions off after 20 minutes with nothing playing.
+        private const val SLEEP_AFTER_MS = 60_000L
+        private const val STOP_AFTER_MS = 20 * 60_000L
         private const val SOUND_LEVEL = 400
 
         // After a switch to another video, skip this much sound: it can still hold the old video.
@@ -384,6 +388,7 @@ class CaptionService : Service() {
             label,
             onClose = { stopSelf() },
             onScreenTouched = { switchLogic.onTouch(SystemClock.elapsedRealtime()) },
+            onSave = { original, translated -> savePhrase(original, translated) },
         )
         return try {
             box.show()
@@ -517,10 +522,19 @@ class CaptionService : Service() {
         return audio
     }
 
-    /** Warns in the caption box when no sound has come through for a while. */
+    /**
+     * Capture thread. Warns in the caption box when no sound has come through for a while, and saves
+     * battery: after a minute of nothing, listening pauses (and starts again the moment sound comes
+     * back); after 20 minutes of nothing, captions turn themselves off.
+     */
     private inner class SilenceWatcher {
         private var lastSoundAt = SystemClock.elapsedRealtime()
         private var warned = false
+        private var turnedOff = false
+
+        @Volatile
+        var asleep = false
+            private set
 
         fun onAudio(loud: Boolean) {
             val now = SystemClock.elapsedRealtime()
@@ -530,17 +544,68 @@ class CaptionService : Service() {
                     warned = false
                     main.post { overlay?.setHint(null) }
                 }
-            } else if (!warned && now - lastSoundAt > SILENCE_WARNING_MS) {
+                if (asleep) {
+                    asleep = false
+                    main.post { wakeUp() }
+                }
+                return
+            }
+            val quietFor = now - lastSoundAt
+            if (!warned && quietFor > SILENCE_WARNING_MS && quietFor < SLEEP_AFTER_MS) {
                 warned = true
                 main.post { overlay?.setHint(NO_SOUND_HINT) }
             }
+            if (!asleep && quietFor > SLEEP_AFTER_MS) {
+                asleep = true
+                main.post { goToSleep() }
+            }
+            if (!turnedOff && quietFor > STOP_AFTER_MS) {
+                turnedOff = true
+                main.post { stopToSaveBattery() }
+            }
         }
+    }
+
+    /** Main thread: nothing has played for a minute. */
+    private fun goToSleep() {
+        if (googleMode) google?.pause()
+        overlay?.let {
+            it.clearCaptions()
+            it.setHint(null)
+            it.setStatus("Paused to save battery. Play a video to carry on.")
+        }
+    }
+
+    /** Main thread: sound is playing again. */
+    private fun wakeUp() {
+        if (googleMode) google?.resume()
+        overlay?.setStatus(null)
+    }
+
+    /** Main thread: nothing has played for 20 minutes, so captions turn off rather than drain the battery. */
+    private fun stopToSaveBattery() {
+        Diagnostics.markStoppedForBattery(this)
+        stopSelf()
     }
 
     private fun reportStop(e: Exception) {
         if (!keepRunning) return
         val reason = e.message ?: e.javaClass.simpleName
+        Diagnostics.note(this, "Captions stopped: $reason")
         main.post { overlay?.setHint("Captions stopped: $reason") }
+    }
+
+    /** ☆ on the caption box: saves the words on screen with their translation. */
+    private fun savePhrase(original: String, translated: String?): Boolean {
+        val language = when {
+            googleMode -> googleLanguage
+            autoMode -> lastLanguage
+            else -> sourceCode
+        }
+        return PhraseBook.add(
+            this,
+            Phrase(original, translated, language, targetCode, System.currentTimeMillis()),
+        )
     }
 
     // ---- Google mode: the phone's own speech recognition ----
@@ -837,6 +902,7 @@ class CaptionService : Service() {
     private fun onEngineProblem(message: String) {
         if (engineFailed) return
         engineFailed = true
+        Diagnostics.note(this, "Instant captions: $message")
         google?.stop()
         google = null
         val box = overlay ?: return
@@ -934,6 +1000,7 @@ class CaptionService : Service() {
         // Usually already loaded while Android's screen-share question was on screen.
         val session = WhisperEngine.take(this, request)
         if (session == null) {
+            Diagnostics.note(this, "The any-language speech model couldn't be loaded")
             main.post {
                 overlay?.setHint(
                     "Auto-detect couldn't start on this phone. Open Clip Captions and choose the language yourself instead.",
@@ -1215,6 +1282,7 @@ class CaptionService : Service() {
                 if (read < 0) error("sound capture stopped (code $read)")
                 if (read == 0) continue
                 silence.onAudio(peakLevel(buffer, read) > SOUND_LEVEL)
+                if (silence.asleep) continue // Nothing playing: save the battery.
 
                 val nowVideo = video.get()
                 if (nowVideo != currentVideo) {
