@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
     private lateinit var speedText: TextView
+    private lateinit var phrasesButton: Button
 
     private val io = Executors.newSingleThreadExecutor()
     private var busy = false
@@ -90,6 +91,16 @@ class MainActivity : AppCompatActivity() {
                 "Clip Captions needs the sound permission (Android calls it Microphone). " +
                     "Only your phone's own sound is used, never the microphone.",
             )
+        }
+    }
+
+    private val setupLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        // Straight after the guide: point at the next step.
+        if (watchSection.visibility == View.VISIBLE &&
+            getSharedPreferences("settings", MODE_PRIVATE).getString("google_languages", null) == null &&
+            getSharedPreferences("settings", MODE_PRIVATE).getString("auto_languages", null) == null
+        ) {
+            setStatus("Next, tap Choose languages and tick the languages you watch.")
         }
     }
 
@@ -140,6 +151,12 @@ class MainActivity : AppCompatActivity() {
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
         speedText = findViewById(R.id.speedText)
+        phrasesButton = findViewById(R.id.phrasesButton)
+        phrasesButton.setOnClickListener { startActivity(Intent(this, PhrasesActivity::class.java)) }
+        findViewById<Button>(R.id.setupButton).setOnClickListener {
+            startActivity(Intent(this, SetupActivity::class.java))
+        }
+        findViewById<Button>(R.id.reportButton).setOnClickListener { sendReport() }
 
         sourceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, Languages.spoken.map { it.name })
             .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
@@ -212,13 +229,51 @@ class MainActivity : AppCompatActivity() {
         startButton.setOnClickListener {
             if (CaptionService.isRunning) stopCaptions() else startCaptions()
         }
+
+        // The first time: a short guide to what it does and what Android will ask.
+        if (savedInstanceState == null && !SetupActivity.isDone(this)) {
+            setupLauncher.launch(Intent(this, SetupActivity::class.java))
+        }
     }
 
     override fun onResume() {
         super.onResume()
         refreshUi()
         if (!busy) setStatus(if (CaptionService.isRunning) runningMessage() else describeChoice())
+        if (Diagnostics.takeStoppedForBattery(this)) {
+            CaptionService.isRunning = false
+            refreshUi()
+            setStatus(
+                "Captions turned off after 20 minutes with nothing playing, to save battery. " +
+                    "Tap Start captions to turn them on again.",
+            )
+        }
         showSpeed()
+        val saved = PhraseBook.count(this)
+        phrasesButton.text = if (saved == 0) getString(R.string.my_phrases) else "${getString(R.string.my_phrases)} ($saved)"
+    }
+
+    /** Opens the share sheet with a problem report: a space to describe it, then details about the phone and app. */
+    private fun sendReport() {
+        val mode = when {
+            isGoogleMode() -> "Instant"
+            isAutoMode() -> "Any language (accuracy: ${selectedSpeed().label})"
+            else -> "Basic (${selectedSpoken().name})"
+        }
+        val settings = mutableListOf(
+            "Mode: $mode",
+            "Translate into: ${selectedCaption().name}",
+            "Languages I watch: ${watchLanguages.text.ifEmpty { "-" }}",
+            "Instant captions: ${googleStatus.text}",
+        )
+        if (speedText.visibility == View.VISIBLE) settings += speedText.text.toString()
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Clip Captions problem report")
+            putExtra(Intent.EXTRA_TEXT, Diagnostics.report(this@MainActivity, settings))
+            if (Diagnostics.SUPPORT_EMAIL.isNotEmpty()) putExtra(Intent.EXTRA_EMAIL, arrayOf(Diagnostics.SUPPORT_EMAIL))
+        }
+        startActivity(Intent.createChooser(send, "Send the report"))
     }
 
     /** How quick captions were last time, measured on this phone, so delays can be pinned down. */
@@ -842,6 +897,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun fail(message: String) {
+        Diagnostics.note(this, message)
         busy = false
         progress.visibility = View.GONE
         setStatus(message)

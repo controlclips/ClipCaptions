@@ -69,6 +69,13 @@ The app's main screen calls the three options **Instant** (Google's on-phone spe
 3. Android asks what to share. Choose **A single app** and pick the app you'll watch (for example TikTok). Your notifications stay visible, because Android hides notification content only while the whole screen is shared. Only the sound is used and nothing is saved, but Android shows its screen-sharing indicator while captions are on.
 4. TikTok opens. Play a video. Drag the caption box up or down; tap ✕ (or **Stop** in the notification) to turn captions off.
 
+## Also in the app
+
+- **First-time guide:** three short steps the first time the app opens (what it does, the two things Android asks you to allow and why, and what to choose when sharing). **Setup guide** on the main screen opens it again.
+- **My phrases:** tap ☆ on the caption box to save the words on screen with their translation. **My phrases** on the main screen lists them; tap one to copy or delete it, or share them all (to notes or a flashcard app).
+- **Battery saving:** after a minute with nothing playing, listening pauses and starts again the moment sound comes back. After 20 minutes with nothing playing, captions turn themselves off.
+- **Report a problem:** opens the share sheet with a report to send: a space to describe what happened, then the phone model, Android version, app settings, speed readout, recent problems and the last crash (if any). Nothing is sent unless you send it. Set `Diagnostics.SUPPORT_EMAIL` to fill in the address automatically.
+
 ## Good to know
 
 - **Caption size** (Small, Medium, Large) is in the app, and the caption box remembers where you last dragged it.
