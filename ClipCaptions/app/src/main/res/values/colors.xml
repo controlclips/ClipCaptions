@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Clip Captions brand colours (see the brand book). -->
 <resources>
-    <color name="brand">#2347A8</color>
-    <color name="brand_light">#A9BCFF</color>
-    <color name="brand_ink">#0B1B4D</color>
-    <color name="icon_background">#14213D</color>
-    <color name="icon_accent">#FFB703</color>
+    <!-- signal: buttons, links, selected states (light theme) -->
+    <color name="brand">#2F55D4</color>
+    <!-- signal in the dark theme -->
+    <color name="brand_light">#9FB4FF</color>
+    <!-- night: the brand's deep ink -->
+    <color name="brand_ink">#111733</color>
+    <color name="icon_background">#111733</color>
+    <!-- subtitle: caption amber -->
+    <color name="icon_accent">#FFC23D</color>
 </resources>

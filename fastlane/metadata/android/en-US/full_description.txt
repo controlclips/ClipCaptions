@@ -1,0 +1,16 @@
+Learn a language while you scroll.
+
+Clip Captions shows what people say in TikTok, Reels, Shorts and other videos as text, translated into your language, in a small box over the video. It reads the sound your phone is playing, so it works with AirPods and headphones in.
+
+• Instant: words appear as they're spoken. With more than one language ticked, it works out each video's language for you.
+• Any language: works out the language of every video itself.
+• Swipe to the next video and the captions clear.
+• Tap ☆ to save a phrase, then find it in My phrases to copy, share or learn.
+• Saves battery: it pauses when nothing is playing.
+• Free, and nothing is recorded or uploaded. Speech recognition and translation run on your phone.
+
+Languages download once, before captions start, so nothing downloads while you're scrolling.
+
+Needs Android 10 or newer. Instant needs Android 13 or newer with Google's on-device speech recognition.
+
+Clip Captions isn't made by, or connected with, TikTok, Instagram or YouTube.

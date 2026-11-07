@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Clip Captions</string>
-    <string name="intro">Live translated captions over TikTok, Reels and Shorts. Works with AirPods and headphones, and everything stays on your phone.</string>
+    <string name="intro">Learn a language while you scroll. Live translated captions over TikTok, Reels and Shorts that work with AirPods and headphones, and everything stays on your phone.</string>
     <string name="label_source">How to listen</string>
     <string name="mode_google">Instant: words appear as they\'re spoken (recommended)</string>
     <string name="google_checking">Checking whether instant captions work on this phone…</string>
