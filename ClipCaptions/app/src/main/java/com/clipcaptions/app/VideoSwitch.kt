@@ -318,19 +318,22 @@ class LeftoverWords {
 }
 
 /**
- * Breaks a long sentence that's still being spoken into short caption lines. People on TikTok
- * often talk without pausing, and re-translating an ever-growing paragraph gets slower and slower.
- * Short lines are each translated once, quickly. The last few words stay "live", because the
- * recogniser may still change them. Counts words, or characters for languages written without spaces.
- * Contains no Android code so it can be tested on its own.
+ * Breaks what's being said into caption lines a sentence at a time, so each line is translated once
+ * and whole: the translator does much better with complete sentences than with fragments. A
+ * sentence counts as finished once the next one has begun (the recogniser's punctuation shows where).
+ * When someone talks for a long time without a sentence ending, a line is cut at [lineWords] (at a
+ * comma if there is one), so translating doesn't slow down as the run grows. The last few words stay
+ * "live", because the recogniser may still change them. Counts words, or characters for languages
+ * written without spaces. Contains no Android code so it can be tested on its own.
  */
 class LineSplitter(
-    // Long enough for the translator to have some context (short fragments translate badly),
-    // short enough that each line is translated quickly and fits the box.
-    private val lineWords: Int = 14,
+    private val lineWords: Int = 30,
     private val liveWords: Int = 4,
-    private val lineChars: Int = 22,
+    private val lineChars: Int = 45,
     private val liveChars: Int = 6,
+    // A "sentence" shorter than this ("Oh. Yes.") waits to join the next one.
+    private val minSentenceWords: Int = 3,
+    private val minSentenceChars: Int = 4,
 ) {
     /** Lines that are finished now, and the words still being spoken. */
     class Split(val finished: List<String>, val live: String)
@@ -368,15 +371,26 @@ class LineSplitter(
         // saying the last one had finished. Start again rather than hide the new words.
         if (doneWords > all.size) doneWords = 0
         val finished = ArrayList<String>()
-        while (all.size - doneWords >= lineWords + liveWords) {
-            var end = doneWords + lineWords // exclusive
-            // Prefer to end the line after punctuation, if there's some near the end of it.
-            for (i in end - 1 downTo doneWords + lineWords / 2) {
-                if (all[i].last() in breakAfter) {
+        while (true) {
+            // A finished sentence: one that ends before the last word (so the next one has begun).
+            var end = -1
+            for (i in doneWords + minSentenceWords - 1 until all.size - 1) {
+                if (all[i].last() in sentenceEnd) {
                     end = i + 1
                     break
                 }
             }
+            if (end < 0 && all.size - doneWords >= lineWords + liveWords) {
+                // A long run with no sentence ending: cut it, at a comma near the end if there is one.
+                end = doneWords + lineWords
+                for (i in end - 1 downTo doneWords + lineWords / 2) {
+                    if (all[i].last() in breakAfter) {
+                        end = i + 1
+                        break
+                    }
+                }
+            }
+            if (end < 0) break
             finished += all.subList(doneWords, end).joinToString(" ")
             doneWords = end
         }
@@ -386,23 +400,34 @@ class LineSplitter(
     private fun splitChars(t: String): Split {
         if (doneChars > t.length) doneChars = 0
         val finished = ArrayList<String>()
-        while (t.length - doneChars >= lineChars + liveChars) {
-            var end = doneChars + lineChars
-            for (i in end - 1 downTo doneChars + lineChars / 2) {
-                if (t[i] in breakAfter) {
+        while (true) {
+            var end = -1
+            for (i in doneChars + minSentenceChars - 1 until t.length - 1) {
+                if (t[i] in sentenceEnd) {
                     end = i + 1
                     break
                 }
             }
-            finished += t.substring(doneChars, end)
+            if (end < 0 && t.length - doneChars >= lineChars + liveChars) {
+                end = doneChars + lineChars
+                for (i in end - 1 downTo doneChars + lineChars / 2) {
+                    if (t[i] in breakAfter) {
+                        end = i + 1
+                        break
+                    }
+                }
+            }
+            if (end < 0) break
+            finished += t.substring(doneChars, end).trim()
             doneChars = end
         }
-        return Split(finished, t.substring(doneChars))
+        return Split(finished, t.substring(doneChars).trim())
     }
 
     private fun words(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
 
     private companion object {
+        val sentenceEnd = setOf('.', '!', '?', '…', '。', '！', '？')
         val breakAfter = setOf('.', ',', '!', '?', ';', ':', '。', '，', '！', '？', '、', '；')
     }
 }

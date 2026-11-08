@@ -44,12 +44,19 @@ object GoogleSpeech {
 
     fun displayName(tag: String): String = Locale.forLanguageTag(tag).getDisplayName(Locale.ENGLISH).ifEmpty { tag }
 
-    /** "en-GB" -> "en", matching the app's other language codes. */
+    /**
+     * "en-GB" -> "en", matching the translator's language codes. Some recognisers name languages
+     * differently (Mandarin "cmn", Norwegian Bokmål "nb", Filipino "fil"), which the translator
+     * wouldn't recognise, so those captions were never translated.
+     */
     fun codeOf(tag: String): String {
         val code = Locale.forLanguageTag(tag).language
         return when (code) {
             "iw" -> "he"
             "in" -> "id"
+            "cmn", "yue", "wuu" -> "zh"
+            "nb", "nn" -> "no"
+            "fil" -> "tl"
             else -> code
         }
     }
@@ -535,6 +542,12 @@ class GoogleCaptioner(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, currentLanguage)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // Punctuation and capitals, so sentences can be translated whole (the translator does far
+            // better with "¿Dónde está? Vamos." than with an unpunctuated run of words). Trailing
+            // punctuation is left off words still being spoken, so a sentence ends only once the next
+            // one has begun.
+            putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY)
+            putExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, s.readSide)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
