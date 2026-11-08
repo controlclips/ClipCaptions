@@ -50,6 +50,36 @@ jobs:
           echo "dir=$best" >> "$GITHUB_OUTPUT"
           echo "version=$bestName" >> "$GITHUB_OUTPUT"
 
+      # Mozilla's offline translator (ClipCaptions/translator, in Rust), built for phones and dropped
+      # into the app's native libraries before Gradle packs them. Cached, so it only rebuilds when
+      # the translator itself changes.
+      - name: Get Rust ready for phones
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-ndk
+            ~/.cargo/registry
+            ${{ steps.find.outputs.dir }}/translator/target-*
+          key: translator-${{ hashFiles('**/translator/Cargo.lock', '**/translator/src/**', '**/translator/fxtranslate/build.rs', '**/translator/fxtranslate/src/**') }}
+          restore-keys: translator-
+
+      - name: Build the offline translator
+        working-directory: ${{ steps.find.outputs.dir }}/translator
+        run: |
+          command -v cargo-ndk || cargo install cargo-ndk --version 4.1.2 --locked
+          export ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}
+          # One copy of the C++ runtime inside the library; fail rather than fall back to slow maths.
+          export CXXSTDLIB=c++_static RUSTFLAGS="-C link-arg=-lc++abi" FXTRANSLATE_REQUIRE_SIMD=1
+          out=../app/src/main/jniLibs
+          # Every phone: plain NEON on 64-bit ARM, NEON on 32-bit ARM, AVX2 on x86 (emulators).
+          FXT_ARM_KERNEL=neon64 cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -P 29 -o "$out" build --release --target-dir target-neon
+          # Newer phones (i8mm): faster maths. The app picks this one only when the CPU has it.
+          cargo ndk -t arm64-v8a -P 29 -o out-i8mm build --release --target-dir target-i8mm
+          cp out-i8mm/arm64-v8a/libcctranslate.so "$out/arm64-v8a/libcctranslate_i8mm.so"
+          ls -l "$out"/*
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

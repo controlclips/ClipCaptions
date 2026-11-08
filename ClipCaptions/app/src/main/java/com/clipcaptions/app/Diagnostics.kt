@@ -104,6 +104,7 @@ object Diagnostics {
         lines += "Processor: ${Build.SUPPORTED_ABIS.joinToString()}, ${Runtime.getRuntime().availableProcessors()} cores, " +
             "speech engine build: $speechBuild"
         lines += String.format(Locale.UK, "Memory: %.1f GB", memory.totalMem / (1024.0 * 1024.0 * 1024.0))
+        lines += "Offline translator: Mozilla ${MozTranslate.backend}"
         lines += settings
         val problems = prefs.getString(KEY_PROBLEMS, "").orEmpty()
         lines += ""

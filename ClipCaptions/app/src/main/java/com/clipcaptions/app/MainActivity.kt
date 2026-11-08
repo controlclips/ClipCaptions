@@ -37,10 +37,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
-import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.translate.TranslateLanguage
-import com.google.mlkit.nl.translate.Translation
-import com.google.mlkit.nl.translate.TranslatorOptions
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
@@ -651,9 +648,56 @@ class MainActivity : AppCompatActivity() {
         }
         progress.visibility = View.VISIBLE
         progress.isIndeterminate = true
-        TranslationPacks.download(this, wanted, { code, index, total ->
-            setStatus("Downloading the ${Languages.nameFor(code)} translation, ${index + 1} of $total (first time only)…")
-        }, done)
+        // Mozilla's translator first (much better), for every language it covers. ML Kit's packs only
+        // for the rest, or if Mozilla's download fails.
+        val sources = codes.distinct().filter { it != target }
+        val mozilla = sources.filter { MozModels.covers(it, target) }
+        io.execute {
+            val failed = ArrayList<String>()
+            val total = mozilla.sumOf { MozModels.missing(this, MozModels.route(it, target).orEmpty()) }
+            var finished = 0
+            for (code in mozilla) {
+                val legs = MozModels.route(code, target).orEmpty()
+                val count = MozModels.missing(this, legs)
+                val before = finished
+                try {
+                    MozModels.download(this, legs) { index, _, percent ->
+                        runOnUiThread {
+                            progress.isIndeterminate = false
+                            progress.progress = percent
+                            setStatus(
+                                "Downloading the ${Languages.nameFor(code)} translation, ${before + index + 1} of $total " +
+                                    "(first time only)… $percent%",
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    failed += code
+                }
+                finished += count
+            }
+            runOnUiThread {
+                val packs = (sources - mozilla.toSet() + failed).distinct()
+                if (packs.isEmpty()) {
+                    done(emptyList())
+                    return@runOnUiThread
+                }
+                progress.isIndeterminate = true
+                TranslationPacks.download(this, packs + target, { code, index, count ->
+                    setStatus("Downloading the ${Languages.nameFor(code)} translation, ${index + 1} of $count (first time only)…")
+                }, done)
+            }
+        }
+    }
+
+    /**
+     * Loads Mozilla's translations for the languages you watch while Android's sharing question is on
+     * screen, so the first caption is translated at full speed.
+     */
+    private fun preloadTranslations(watched: List<String>) {
+        val target = selectedCaption().code
+        val legs = watched.distinct().mapNotNull { MozModels.readyRoute(this, it, target) }.flatten()
+        MozEngines.preload(this, legs)
     }
 
     // ---- Whisper mode: the languages you watch ----
@@ -682,7 +726,7 @@ class MainActivity : AppCompatActivity() {
     private fun chooseAutoLanguages() {
         val catalogue = translatableLanguages()
         val chosen = chosenAutoLanguages().toMutableList()
-        val onPhone = TranslationPacks.known(this)
+        val onPhone = TranslationPacks.known(this) + MozModels.readyAppCodes(this, selectedCaption().code)
         val labels = catalogue.map { code ->
             val name = Languages.nameFor(code)
             if (code == "en" || code in onPhone) name else "$name (download)"
@@ -874,37 +918,24 @@ class MainActivity : AppCompatActivity() {
             requestSoundSharing(launch)
             return
         }
-        val from = TranslateLanguage.fromLanguageTag(spoken.code)
-        val to = TranslateLanguage.fromLanguageTag(caption.code)
-        if (from == null || to == null) {
+        val mlkit = TranslateLanguage.fromLanguageTag(spoken.code) != null && TranslateLanguage.fromLanguageTag(caption.code) != null
+        if (!mlkit && !MozModels.covers(spoken.code, caption.code)) {
             fail("Translating ${spoken.name} into ${caption.name} isn't available.")
             return
         }
-        // Already on the phone: no waiting, no "first time" message.
-        val packs = TranslationPacks.known(this)
-        if (spoken.code in packs && (caption.code == "en" || caption.code in packs)) {
-            requestSoundSharing(launch)
-            return
-        }
-        progress.isIndeterminate = true
-        setStatus("Downloading the ${spoken.name} → ${caption.name} translation (first time only)…")
-        val translator = Translation.getClient(
-            TranslatorOptions.Builder().setSourceLanguage(from).setTargetLanguage(to).build(),
-        )
-        translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
-            .addOnSuccessListener {
-                translator.close()
-                TranslationPacks.remember(this, listOf(spoken.code, caption.code))
+        // Instant once it's on the phone.
+        downloadTranslations(listOf(spoken.code)) { failed ->
+            if (failed.isEmpty()) {
                 requestSoundSharing(launch)
-            }
-            .addOnFailureListener { e ->
-                translator.close()
+            } else {
                 fail("The translation download didn't finish. Check your internet connection and tap Start captions again.")
             }
+        }
     }
 
     private fun requestSoundSharing(launch: Launch) {
         pendingLaunch = launch
+        preloadTranslations(launch.watched)
         progress.visibility = View.GONE
         setStatus(
             "Android will now ask what to share. Choose “A single app” and pick the app you'll watch, such as " +
