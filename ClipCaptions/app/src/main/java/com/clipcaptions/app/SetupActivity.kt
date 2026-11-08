@@ -88,7 +88,10 @@ class SetupActivity : AppCompatActivity() {
         content.removeAllViews()
         content.addView(TextView(this).apply {
             text = "${page + 1} of 3"
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_LabelLarge)
+            typeface = resources.getFont(R.font.atkinson)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textSize = 14f
+            setTextColor(getColor(R.color.cc_signal))
         })
         when (page) {
             0 -> welcome()
@@ -99,13 +102,18 @@ class SetupActivity : AppCompatActivity() {
 
     private fun title(text: String) = content.addView(TextView(this).apply {
         this.text = text
-        setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_HeadlineMedium)
-        setPadding(0, dp(12f), 0, dp(12f))
+        typeface = resources.getFont(R.font.unbounded_bold)
+        textSize = 24f
+        setTextColor(getColor(R.color.cc_ink))
+        setLineSpacing(0f, 1.1f)
+        setPadding(0, dp(12f), 0, dp(16f))
     })
 
     private fun body(text: String) = content.addView(TextView(this).apply {
         this.text = text
-        setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyLarge)
+        typeface = resources.getFont(R.font.atkinson)
+        textSize = 17f
+        setTextColor(getColor(R.color.cc_ink))
         setLineSpacing(0f, 1.2f)
         setPadding(0, 0, 0, dp(16f))
     })
@@ -117,7 +125,11 @@ class SetupActivity : AppCompatActivity() {
             MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle)
         }
         b.text = text
-        b.minHeight = dp(52f)
+        b.minHeight = dp(54f)
+        b.typeface = resources.getFont(R.font.atkinson)
+        b.setTypeface(b.typeface, android.graphics.Typeface.BOLD)
+        b.textSize = 16f
+        b.cornerRadius = dp(16f)
         b.setOnClickListener { onClick() }
         content.addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(8f)

@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The main screen: a dark header with the logo, a sample caption and the big Start button, then the
+  settings in cards (how to listen, languages, captions), My phrases, and a footer.
+-->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/cc_surface"
     android:clipToPadding="false"
     android:fillViewport="true">
 
@@ -10,307 +16,513 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="24dp"
-        android:paddingTop="32dp"
-        android:paddingEnd="24dp"
-        android:paddingBottom="32dp">
+        android:paddingBottom="24dp">
 
+        <!-- ===== Header ===== -->
         <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <ImageView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="12dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/ic_brand_mark" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/app_name"
-                android:textAppearance="?attr/textAppearanceHeadlineMedium"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/versionText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:textAppearance="?attr/textAppearanceLabelMedium" />
-
-        <TextView
+            android:id="@+id/hero"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/intro"
-            android:textAppearance="?attr/textAppearanceBodyLarge" />
+            android:background="@drawable/bg_hero"
+            android:orientation="vertical"
+            android:paddingStart="20dp"
+            android:paddingTop="24dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="22dp">
 
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:layout_width="29dp"
+                    android:layout_height="30dp"
+                    android:layout_marginEnd="10dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_brand_mark_on_dark" />
+
+                <TextView
+                    style="@style/CC.Text.Brand"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/app_name" />
+            </LinearLayout>
+
+            <TextView
+                style="@style/CC.Text.OnHero"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="@font/atkinson"
+                android:text="@string/tagline"
+                android:textSize="16sp" />
+
+            <!-- A sample of what captions look like over a video. -->
+            <FrameLayout
+                android:id="@+id/heroClip"
+                android:layout_width="match_parent"
+                android:layout_height="148dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_clip"
+                android:clipToOutline="true"
+                android:contentDescription="@string/sample_description">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom"
+                    android:layout_margin="10dp"
+                    android:background="@drawable/bg_caption_box"
+                    android:importantForAccessibility="noHideDescendants"
+                    android:orientation="vertical"
+                    android:paddingStart="12dp"
+                    android:paddingTop="8dp"
+                    android:paddingEnd="12dp"
+                    android:paddingBottom="10dp">
+
+                    <TextView
+                        style="@style/CC.Text.Label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/atkinson"
+                        android:text="@string/sample_label" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:fontFamily="@font/atkinson"
+                        android:text="@string/sample_caption"
+                        android:textColor="#FFFFFF"
+                        android:textSize="17sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:fontFamily="@font/atkinson"
+                        android:text="@string/sample_original"
+                        android:textColor="@color/cc_caption_dim"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/startButton"
+                android:layout_width="match_parent"
+                android:layout_height="58dp"
+                android:layout_marginTop="18dp"
+                android:fontFamily="@font/atkinson"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:text="@string/start_captions"
+                android:textColor="@color/cc_night"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                app:backgroundTint="@color/cc_amber"
+                app:cornerRadius="16dp" />
+
+            <ProgressBar
+                android:id="@+id/progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:max="100"
+                android:progressBackgroundTint="#33FFFFFF"
+                android:progressTint="@color/cc_amber"
+                android:indeterminateTint="@color/cc_amber"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/status"
+                style="@style/CC.Text.OnHero"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <!-- ===== How to listen ===== -->
         <TextView
+            style="@style/CC.Text.Section"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:text="@string/label_source"
-            android:textAppearance="?attr/textAppearanceLabelLarge" />
+            android:layout_marginStart="20dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="10dp"
+            android:text="@string/label_source" />
 
         <RadioGroup
             android:id="@+id/modeGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
             android:orientation="vertical">
 
             <RadioButton
                 android:id="@+id/modeGoogle"
+                style="@style/CC.Option"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:text="@string/mode_google" />
+                android:layout_height="wrap_content" />
 
             <RadioButton
                 android:id="@+id/modeAuto"
+                style="@style/CC.Option"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:text="@string/mode_auto" />
+                android:layout_height="wrap_content" />
 
             <RadioButton
                 android:id="@+id/modeLive"
+                style="@style/CC.Option"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:text="@string/mode_live" />
+                android:layout_height="wrap_content" />
         </RadioGroup>
 
         <TextView
             android:id="@+id/googleStatus"
+            style="@style/CC.Text.Small"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/google_checking"
-            android:textAppearance="?attr/textAppearanceBodySmall" />
+            android:layout_marginStart="20dp"
+            android:layout_marginEnd="20dp"
+            android:text="@string/google_checking" />
 
         <Button
             android:id="@+id/googleRecheck"
-            style="?attr/borderlessButtonStyle"
+            style="@style/CC.LinkButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
+            android:layout_marginStart="12dp"
             android:text="@string/google_recheck"
             android:visibility="gone" />
 
-        <LinearLayout
-            android:id="@+id/watchSection"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="vertical"
-            android:visibility="gone">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/label_watch"
-                android:textAppearance="?attr/textAppearanceLabelLarge" />
-
-            <TextView
-                android:id="@+id/watchLanguages"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-            <Button
-                android:id="@+id/watchChoose"
-                style="?attr/materialButtonOutlinedStyle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:minHeight="48dp"
-                android:text="@string/watch_choose" />
-
-            <TextView
-                android:id="@+id/watchNote"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/google_note"
-                android:textAppearance="?attr/textAppearanceBodySmall" />
-        </LinearLayout>
-
         <TextView
             android:id="@+id/autoUnavailable"
+            style="@style/CC.Text.Small"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="20dp"
             android:layout_marginTop="4dp"
+            android:layout_marginEnd="20dp"
             android:text="@string/auto_unavailable"
-            android:textAppearance="?attr/textAppearanceBodySmall"
             android:visibility="gone" />
 
+        <!-- ===== Languages ===== -->
         <TextView
-            android:id="@+id/sourceLabel"
+            style="@style/CC.Text.Section"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:labelFor="@id/sourceSpinner"
-            android:text="@string/label_spoken"
-            android:textAppearance="?attr/textAppearanceLabelLarge" />
-
-        <Spinner
-            android:id="@+id/sourceSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:contentDescription="@string/source_description"
-            android:minHeight="48dp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:labelFor="@id/targetSpinner"
-            android:text="@string/label_target"
-            android:textAppearance="?attr/textAppearanceLabelLarge" />
-
-        <Spinner
-            android:id="@+id/targetSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:minHeight="48dp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:labelFor="@id/sizeSpinner"
-            android:text="@string/label_size"
-            android:textAppearance="?attr/textAppearanceLabelLarge" />
-
-        <Spinner
-            android:id="@+id/sizeSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:minHeight="48dp" />
+            android:layout_marginStart="20dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="10dp"
+            android:text="@string/label_languages" />
 
         <LinearLayout
-            android:id="@+id/speedSection"
+            style="@style/CC.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:id="@+id/watchSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        style="@style/CC.Text.Strong"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="@font/atkinson"
+                        android:text="@string/label_watch"
+                        android:textColor="@color/cc_ink"
+                        android:textSize="16sp" />
+
+                    <Button
+                        android:id="@+id/watchChoose"
+                        style="@style/CC.LinkButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="40dp"
+                        android:text="@string/watch_choose" />
+                </LinearLayout>
+
+                <com.google.android.material.chip.ChipGroup
+                    android:id="@+id/watchChips"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    app:chipSpacingHorizontal="8dp"
+                    app:chipSpacingVertical="4dp" />
+
+                <TextView
+                    android:id="@+id/watchLanguages"
+                    style="@style/CC.Text.Small"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" />
+
+                <TextView
+                    android:id="@+id/watchNote"
+                    style="@style/CC.Text.Small"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/google_note" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="16dp"
+                    android:background="@color/cc_line" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/sourceLabel"
+                style="@style/CC.Text.Strong"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/atkinson"
+                android:labelFor="@id/sourceSpinner"
+                android:text="@string/label_spoken"
+                android:textColor="@color/cc_ink"
+                android:textSize="16sp" />
+
+            <Spinner
+                android:id="@+id/sourceSpinner"
+                style="@style/CC.Field"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:contentDescription="@string/source_description"
+                android:popupBackground="@drawable/bg_card" />
+
+            <TextView
+                style="@style/CC.Text.Strong"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/atkinson"
+                android:labelFor="@id/targetSpinner"
+                android:text="@string/label_target"
+                android:textColor="@color/cc_ink"
+                android:textSize="16sp" />
+
+            <Spinner
+                android:id="@+id/targetSpinner"
+                style="@style/CC.Field"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:popupBackground="@drawable/bg_card" />
+        </LinearLayout>
+
+        <!-- ===== Captions ===== -->
+        <TextView
+            style="@style/CC.Text.Section"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="20dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="10dp"
+            android:text="@string/label_captions" />
+
+        <LinearLayout
+            style="@style/CC.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <TextView
+                style="@style/CC.Text.Strong"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/atkinson"
+                android:text="@string/label_size"
+                android:textColor="@color/cc_ink"
+                android:textSize="16sp" />
+
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/sizeGroup"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                app:selectionRequired="true"
+                app:singleSelection="true">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/sizeSmall"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="@font/atkinson"
+                    android:text="@string/size_small"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/sizeMedium"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="@font/atkinson"
+                    android:text="@string/size_medium"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/sizeLarge"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="@font/atkinson"
+                    android:text="@string/size_large"
+                    android:textStyle="bold" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <LinearLayout
+                android:id="@+id/speedSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/CC.Text.Strong"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:fontFamily="@font/atkinson"
+                    android:labelFor="@id/speedSpinner"
+                    android:text="@string/label_speed"
+                    android:textColor="@color/cc_ink"
+                    android:textSize="16sp" />
+
+                <Spinner
+                    android:id="@+id/speedSpinner"
+                    style="@style/CC.Field"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:popupBackground="@drawable/bg_card" />
+
+                <TextView
+                    style="@style/CC.Text.Small"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/speed_note" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ===== My phrases ===== -->
+        <LinearLayout
+            android:id="@+id/phrasesRow"
+            style="@style/CC.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_card"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="?attr/selectableItemBackground"
+            android:gravity="center_vertical"
+            android:minHeight="60dp"
+            android:orientation="horizontal">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:labelFor="@id/speedSpinner"
-                android:text="@string/label_speed"
-                android:textAppearance="?attr/textAppearanceLabelLarge" />
-
-            <Spinner
-                android:id="@+id/speedSpinner"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:minHeight="48dp" />
+                android:layout_marginEnd="12dp"
+                android:importantForAccessibility="no"
+                android:text="☆"
+                android:textColor="@color/cc_amber"
+                android:textSize="22sp" />
 
             <TextView
-                android:layout_width="match_parent"
+                style="@style/CC.Text.Strong"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/speed_note"
-                android:textAppearance="?attr/textAppearanceBodySmall" />
+                android:layout_weight="1"
+                android:fontFamily="@font/atkinson"
+                android:text="@string/my_phrases"
+                android:textColor="@color/cc_ink"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/phrasesCount"
+                style="@style/CC.Text.Small"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_marginStart="4dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_chevron_right" />
         </LinearLayout>
 
-        <Button
-            android:id="@+id/startButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:minHeight="56dp"
-            android:text="@string/start_captions" />
-
-        <ProgressBar
-            android:id="@+id/progress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:max="100"
-            android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:textAppearance="?attr/textAppearanceBodyMedium" />
-
+        <!-- ===== Footer ===== -->
         <TextView
             android:id="@+id/speedText"
+            style="@style/CC.Text.Small"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:layout_marginStart="20dp"
+            android:layout_marginTop="14dp"
+            android:layout_marginEnd="20dp"
+            android:textSize="13sp"
             android:visibility="gone" />
 
-        <Button
-            android:id="@+id/phrasesButton"
-            style="?attr/materialButtonOutlinedStyle"
+        <TextView
+            style="@style/CC.Text.Small"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:minHeight="52dp"
-            android:text="@string/my_phrases" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="36dp"
-            android:text="@string/how_title"
-            android:textAppearance="?attr/textAppearanceTitleMedium" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:lineSpacingMultiplier="1.25"
-            android:text="@string/how_steps"
-            android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginStart="20dp"
+            android:layout_marginTop="14dp"
+            android:layout_marginEnd="20dp"
             android:text="@string/accuracy_note"
-            android:textAppearance="?attr/textAppearanceBodySmall" />
+            android:textSize="13sp" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginStart="12dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginEnd="12dp"
+            android:gravity="center_vertical"
             android:orientation="horizontal">
 
             <Button
                 android:id="@+id/setupButton"
-                style="?attr/borderlessButtonStyle"
+                style="@style/CC.LinkButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:minHeight="48dp"
                 android:text="@string/setup_guide" />
 
             <Button
                 android:id="@+id/reportButton"
-                style="?attr/borderlessButtonStyle"
+                style="@style/CC.LinkButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:minHeight="48dp"
                 android:text="@string/report_problem" />
+
+            <TextView
+                android:id="@+id/versionText"
+                style="@style/CC.Text.Small"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="end"
+                android:paddingEnd="8dp"
+                android:textSize="13sp" />
         </LinearLayout>
     </LinearLayout>
 </ScrollView>
