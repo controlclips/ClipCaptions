@@ -25,10 +25,6 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.IntentCompat
-import com.google.mlkit.nl.translate.TranslateLanguage
-import com.google.mlkit.nl.translate.Translation
-import com.google.mlkit.nl.translate.Translator
-import com.google.mlkit.nl.translate.TranslatorOptions
 import org.json.JSONObject
 import org.vosk.LibVosk
 import org.vosk.LogLevel
@@ -156,7 +152,7 @@ class CaptionService : Service() {
     private var engineFailed = false
     private var fallbackRequest: WhisperEngine.Request? = null
     private var googleLanguage = ""
-    private var liveTranslator: Translator? = null
+    private var liveTranslator: CaptionTranslator? = null
     // Long sentences are shown as short lines, each translated once (see LineSplitter).
     private val splitter = LineSplitter()
     private var liveText = ""
@@ -192,14 +188,14 @@ class CaptionService : Service() {
 
     // Live mode
     private var sourceCode = "en"
-    private var translator: Translator? = null
+    private var translator: CaptionTranslator? = null
     private var liveGeneration = 0
     private var liveInFlight = false
     private var pendingLive: String? = null
 
     // Auto mode
     private var lastLanguage = ""
-    private val translators = HashMap<String, Translator>()
+    private val translators = HashMap<String, CaptionTranslator>()
     // Languages whose translation is on the phone. Read by the Whisper thread too.
     private val readyLanguages: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
     // Languages whose translation is downloading in the background right now.
@@ -379,6 +375,7 @@ class CaptionService : Service() {
         translator = null
         translators.values.forEach { it.close() }
         translators.clear()
+        MozEngines.releaseAll()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -438,16 +435,9 @@ class CaptionService : Service() {
             .build()
     }
 
-    private fun createTranslator(source: String, target: String): Translator? {
-        if (source == target) return null
-        val from = TranslateLanguage.fromLanguageTag(source) ?: return null
-        val to = TranslateLanguage.fromLanguageTag(target) ?: return null
-        val options = TranslatorOptions.Builder()
-            .setSourceLanguage(from)
-            .setTargetLanguage(to)
-            .build()
-        return Translation.getClient(options)
-    }
+    /** Mozilla's translator when its files for the pair are on the phone, otherwise ML Kit. */
+    private fun createTranslator(source: String, target: String): CaptionTranslator? =
+        CaptionTranslator.create(this, source, target)
 
     // ---- Spotting a move to another video (main thread) ----
 
@@ -1081,11 +1071,11 @@ class CaptionService : Service() {
                     spotted = it
                     languageLock.record(it.code, it.confidence)
                 }?.code
-                // Whisper writes the words in their own language and ML Kit translates them, which is more
-                // accurate with these model sizes. Whisper translates into English itself for languages ML Kit
-                // can't translate, and for ones whose translation is still downloading, so nothing waits for it.
+                // Whisper writes the words in their own language and the translator (Mozilla's, or ML Kit's)
+                // translates them, which is more accurate with these model sizes. Whisper translates into English
+                // itself for languages with no translation on the phone, so nothing waits for a download.
                 val whisperTranslates = language != null && targetCode == "en" && language != "en" &&
-                    (TranslateLanguage.fromLanguageTag(language) == null || language !in readyLanguages)
+                    language !in readyLanguages
                 val bytes = WhisperLib.nativeTranscribe(
                     session.handle,
                     chunk.samples,
@@ -1206,7 +1196,7 @@ class CaptionService : Service() {
      * Downloads a language's translation in the background, once. Captions carry on meanwhile; the
      * box's label says it's on its way, rather than a message covering the words.
      */
-    private fun prepareTranslation(language: String, tr: Translator) {
+    private fun prepareTranslation(language: String, tr: CaptionTranslator) {
         if (language in readyLanguages || !downloading.add(language)) return
         refreshLabel()
         tr.downloadModelIfNeeded()
@@ -1238,7 +1228,7 @@ class CaptionService : Service() {
         }
     }
 
-    private fun warmUp(tr: Translator) {
+    private fun warmUp(tr: CaptionTranslator) {
         tr.translate("Hello").addOnFailureListener { }
     }
 
@@ -1247,6 +1237,8 @@ class CaptionService : Service() {
      * say "first time only" on every start. The list is remembered, then checked with ML Kit.
      */
     private fun loadTranslationPacks() {
+        // Mozilla's translator, for the pairs whose files are on the phone.
+        readyLanguages.addAll(MozModels.readyAppCodes(this, targetCode))
         addReadyPacks(TranslationPacks.known(this))
         TranslationPacks.refresh(this) { codes -> addReadyPacks(codes) }
     }
@@ -1265,7 +1257,7 @@ class CaptionService : Service() {
         TranslationPacks.remember(this, listOf(language, targetCode))
     }
 
-    private fun translatorFor(language: String): Translator? {
+    private fun translatorFor(language: String): CaptionTranslator? {
         translators[language]?.let { return it }
         val created = createTranslator(language, targetCode) ?: return null
         translators[language] = created
@@ -1400,7 +1392,7 @@ class CaptionService : Service() {
     }
 
     /** Translates the sentence in progress, one request at a time, always using the newest words. */
-    private fun translateLive(tr: Translator) {
+    private fun translateLive(tr: CaptionTranslator) {
         if (liveInFlight) return
         val text = pendingLive ?: return
         pendingLive = null

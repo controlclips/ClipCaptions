@@ -1,0 +1,23 @@
+# Clip Captions' offline translator: a small Android (JNI) wrapper around
+# Mozilla's Firefox Translations engine (fxtranslate, MPL-2.0, vendored in
+# ./fxtranslate). Built by .github/workflows/main.yml with cargo-ndk into
+# app/src/main/jniLibs before Gradle runs.
+[package]
+name = "cctranslate"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+fxtranslate = { path = "fxtranslate", default-features = false, features = ["fast", "discovery"] }
+jni = { version = "0.21", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
