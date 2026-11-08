@@ -71,6 +71,8 @@ The app's main screen calls the three options **Instant** (Google's on-phone spe
 
 ## Also in the app
 
+- **Listening for the right languages (Instant):** Instant only understands the languages ticked under **Languages I watch**; a video in any other language comes out as nonsense. The main screen warns when only the caption language is ticked, the language list opens straight after the setup guide, and every video's language is spotted: if it's clearly one you haven't ticked, the caption box offers "Tap to add Spanish", which adds and downloads it.
+
 - **First-time guide:** three short steps the first time the app opens (what it does, the two things Android asks you to allow and why, and what to choose when sharing). **Setup guide** on the main screen opens it again.
 - **My phrases:** tap ☆ on the caption box to save the words on screen with their translation. **My phrases** on the main screen lists them; tap one to copy or delete it, or share them all (to notes or a flashcard app).
 - **Battery saving:** after a minute with nothing playing, listening pauses and starts again the moment sound comes back. After 20 minutes with nothing playing, captions turn themselves off.

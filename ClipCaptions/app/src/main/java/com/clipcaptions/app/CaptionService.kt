@@ -291,11 +291,12 @@ class CaptionService : Service() {
             if (!showOverlay(googleLabel(googleLanguage))) return START_NOT_STICKY
             overlay?.setStatus("Listening… play a video")
             val switch = command.getStringArrayListExtra(EXTRA_GOOGLE_SWITCH).orEmpty()
-            googleTags = switch
-            // With several languages, spot each video's language here (a fraction of a second) rather
-            // than wait for Google's own detection, which can take several seconds.
+            googleTags = switch.ifEmpty { listOf(googleTag) }
+            // Spot each video's language here (a fraction of a second): with several languages, to
+            // switch to the right one far sooner than Google's own detection; with any number, to
+            // notice a video in a language you haven't ticked (which Google would turn into nonsense).
             val path = spotterPath
-            val spotHere = switch.size > 1 && path != null && WhisperLib.available
+            val spotHere = path != null && WhisperLib.available
             val captioner = GoogleCaptioner(this, googleTag, switch, googleEvents, googleDetects = !spotHere)
             google = captioner
             if (spotHere && path != null) {
@@ -734,7 +735,13 @@ class CaptionService : Service() {
             }
             val audio = speech ?: window
             val allowed = googleTags.map { LanguagePick.whisperCode(GoogleSpeech.codeOf(it)) }
-            val guess = sp.detect(audio, allowed, othersIfClear = false) ?: return
+            val guess = sp.detect(audio, allowed, othersIfClear = true) ?: return
+            if (guess.code !in allowed) {
+                // Clearly a language you haven't ticked: offer to add it.
+                spotDecided.set(videoNumber)
+                main.post { onUnwatchedLanguage(guess.code, videoNumber) }
+                return
+            }
             // Very sure on a little speech, or fairly sure on more.
             val needed = if (audio.size < SAMPLE_RATE * 3 / 2) 0.85f else 0.7f
             if (guess.confidence < needed && !last) return
@@ -746,6 +753,22 @@ class CaptionService : Service() {
     }
 
     /** Main thread: if the video isn't in the language Google is listening for, switch straight away. */
+    // Languages already offered this session, so the offer doesn't repeat on every video.
+    private val offeredLanguages = HashSet<String>()
+
+    /** Main thread: the video is in a language that isn't ticked. Offer to add it, once per language. */
+    private fun onUnwatchedLanguage(code: String, videoNumber: Int) {
+        if (!googleMode || videoNumber != video.get() || !offeredLanguages.add(code)) return
+        val name = Languages.nameFor(code)
+        Diagnostics.note(this, "Heard $name, which isn't ticked")
+        overlay?.flashAction("This video sounds like $name, which isn't ticked. Tap to add $name.") {
+            val open = Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(MainActivity.EXTRA_ADD_LANGUAGE, code)
+            startActivity(open)
+        }
+    }
+
     private fun onGoogleLanguageSpotted(guess: LanguageGuess, videoNumber: Int) {
         if (!googleMode || videoNumber != video.get() || guess.confidence < 0.7f) return
         val captioner = google ?: return

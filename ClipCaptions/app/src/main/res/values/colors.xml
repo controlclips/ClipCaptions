@@ -28,4 +28,6 @@
     <color name="cc_clip_glow">#665B7CF0</color>
     <color name="cc_caption_box">#E00E111A</color>
     <color name="cc_caption_dim">#99FFFFFF</color>
+    <!-- Warnings, as text (caption amber, darkened for light screens) -->
+    <color name="cc_warn">#8A5A00</color>
 </resources>

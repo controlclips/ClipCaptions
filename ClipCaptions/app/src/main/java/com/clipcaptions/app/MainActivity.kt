@@ -45,6 +45,15 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        /** A Whisper language code (such as "es") to add to the languages you watch, from the caption box. */
+        const val EXTRA_ADD_LANGUAGE = "addLanguage"
+    }
+
+    // A language to add once the phone's languages are known, and whether to open the language list then.
+    private var pendingAdd: String? = null
+    private var pendingChoose = false
+
     /** Everything the caption service needs once Android has agreed to share the sound. */
     private data class Launch(
         val auto: Boolean,
@@ -108,12 +117,74 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val setupLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        // Straight after the guide: point at the next step.
-        if (watchSection.visibility == View.VISIBLE &&
-            getSharedPreferences("settings", MODE_PRIVATE).getString("google_languages", null) == null &&
-            getSharedPreferences("settings", MODE_PRIVATE).getString("auto_languages", null) == null
-        ) {
-            setStatus("Next, tap Choose languages and tick the languages you watch.")
+        // Straight after the guide: choose the languages you watch, so captions don't start out
+        // listening for the wrong one.
+        val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+        if (prefs.getString("google_languages", null) == null && prefs.getString("auto_languages", null) == null) {
+            openLanguageList()
+        }
+    }
+
+    /** Opens the language list for the chosen way of listening (once Instant has been checked). */
+    private fun openLanguageList() {
+        when {
+            googleSupport == null -> pendingChoose = true
+            isGoogleMode() -> chooseGoogleLanguages()
+            isAutoMode() -> chooseAutoLanguages()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        takeAddRequest(intent)
+    }
+
+    /** "Tap to add Spanish" in the caption box opens the app with that language. */
+    private fun takeAddRequest(intent: Intent?) {
+        val code = intent?.getStringExtra(EXTRA_ADD_LANGUAGE) ?: return
+        intent.removeExtra(EXTRA_ADD_LANGUAGE)
+        if (googleSupport == null) pendingAdd = code else addWatchedLanguage(code)
+    }
+
+    /** Adds a language (a Whisper code) to the languages Instant listens for, and downloads it. */
+    private fun addWatchedLanguage(code: String) {
+        val name = Languages.nameFor(code)
+        val support = googleSupport as? GoogleSpeech.Support.Ready
+        if (support == null) {
+            setStatus("Instant captions aren't available on this phone, so $name can't be added. Try Any language instead.")
+            return
+        }
+        val matches = googleCatalogue(support).filter { LanguagePick.whisperCode(GoogleSpeech.codeOf(it)) == code }
+        if (matches.isEmpty()) {
+            setStatus("Instant captions can't do $name on this phone. Any language can: choose it under How to listen.")
+            return
+        }
+        // Prefer a version already on the phone, then one for the phone's own country.
+        val country = java.util.Locale.getDefault().country
+        val tag = matches.firstOrNull { it in support.installed }
+            ?: matches.firstOrNull { java.util.Locale.forLanguageTag(it).country == country }
+            ?: matches.first()
+        val chosen = (chosenGoogleLanguages() + tag).distinct()
+        saveChosenGoogleLanguages(chosen)
+        modeGroup.check(R.id.modeGoogle)
+        showGoogleLanguages()
+        val running = CaptionService.isRunning
+        busy = true
+        refreshUi()
+        downloadGoogleLanguages(chosen) {
+            val finish = {
+                busy = false
+                progress.visibility = View.GONE
+                refreshUi()
+                setStatus(
+                    if (running) {
+                        "$name is added. Stop captions and start them again to use it."
+                    } else {
+                        "$name is added. Tap Start captions."
+                    },
+                )
+            }
+            if (WhisperLib.available) downloadSpotter { finish() } else finish()
         }
     }
 
@@ -234,6 +305,7 @@ class MainActivity : AppCompatActivity() {
                 .putString("speed", selectedSpeed().key)
                 .apply()
             if (!busy && !CaptionService.isRunning) setStatus(describeChoice())
+            if (isGoogleMode()) showGoogleLanguages()
         }
         modeGroup.setOnCheckedChangeListener { _, _ ->
             showModeSections()
@@ -256,6 +328,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null && !SetupActivity.isDone(this)) {
             setupLauncher.launch(Intent(this, SetupActivity::class.java))
         }
+        if (savedInstanceState == null) takeAddRequest(intent)
     }
 
     override fun onResume() {
@@ -419,6 +492,14 @@ class MainActivity : AppCompatActivity() {
             showModeSections()
             styleOptions()
             if (!busy && !CaptionService.isRunning) setStatus(describeChoice())
+            pendingAdd?.let {
+                pendingAdd = null
+                addWatchedLanguage(it)
+            }
+            if (pendingChoose) {
+                pendingChoose = false
+                openLanguageList()
+            }
         }
     }
 
@@ -454,9 +535,15 @@ class MainActivity : AppCompatActivity() {
         val chosen = chosenGoogleLanguages()
         showWatchChips(chosen.map { GoogleSpeech.displayName(it) })
         watchedNames = chosen.joinToString(", ") { GoogleSpeech.displayName(it) }
+        val target = selectedCaption().code
+        val onlyTarget = chosen.isNotEmpty() && chosen.all { GoogleSpeech.codeOf(it) == target }
         setWatchNote(
-            when {
+            warning = onlyTarget,
+            note = when {
                 chosen.isEmpty() -> "None yet. Tap Choose languages."
+                onlyTarget ->
+                    "Only ${selectedCaption().name} is ticked, so videos in other languages come out as nonsense. " +
+                        "Tap Change and tick the languages your videos are in."
                 chosen.size == 1 || WhisperLib.available || Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> null
                 else -> "Switching between them needs Android 14, so it listens for ${GoogleSpeech.displayName(chosen.first())}."
             },
@@ -466,9 +553,11 @@ class MainActivity : AppCompatActivity() {
     private var watchedNames = ""
 
     /** A short note under the language chips, or nothing. */
-    private fun setWatchNote(note: String?) {
+    private fun setWatchNote(note: String?, warning: Boolean = false) {
         watchLanguages.text = note ?: ""
         watchLanguages.visibility = if (note == null) View.GONE else View.VISIBLE
+        watchLanguages.setTextColor(getColor(if (warning) R.color.cc_warn else R.color.cc_muted))
+        watchLanguages.setTypeface(resources.getFont(R.font.atkinson), if (warning) Typeface.BOLD else Typeface.NORMAL)
     }
 
     /** Lets you tick every language you watch, then downloads them once. */
@@ -504,7 +593,7 @@ class MainActivity : AppCompatActivity() {
                         progress.visibility = View.GONE
                         refreshUi()
                     }
-                    if (chosen.size > 1 && WhisperLib.available) {
+                    if (WhisperLib.available) {
                         // Keep the languages' download result on screen once the spotter is done.
                         val result = status.text.toString()
                         downloadSpotter {
@@ -645,7 +734,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         downloadGoogleLanguages(chosen) {
-            if (chosen.size > 1 && WhisperLib.available) downloadSpotter { startGoogle(chosen) } else startGoogle(chosen)
+            if (WhisperLib.available) downloadSpotter { startGoogle(chosen) } else startGoogle(chosen)
         }
     }
 

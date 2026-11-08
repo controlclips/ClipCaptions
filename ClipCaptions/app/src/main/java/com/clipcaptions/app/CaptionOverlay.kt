@@ -269,6 +269,21 @@ class CaptionOverlay(
         if (!shown) return
         hintText.text = text ?: ""
         hintText.visibility = if (text == null) View.GONE else View.VISIBLE
+        hintText.setOnClickListener(null)
+        hintText.isClickable = false
+    }
+
+    /** A note under the captions that does something when tapped, and disappears after a few seconds. */
+    fun flashAction(text: String, onTap: () -> Unit) {
+        if (!shown) return
+        val token = ++hintToken
+        showHint(text)
+        hintText.isClickable = true
+        hintText.setOnClickListener {
+            showHint(null)
+            onTap()
+        }
+        root.postDelayed({ if (token == hintToken) showHint(null) }, 10_000L)
     }
 
     /**

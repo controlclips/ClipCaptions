@@ -325,10 +325,12 @@ class LeftoverWords {
  * Contains no Android code so it can be tested on its own.
  */
 class LineSplitter(
-    private val lineWords: Int = 10,
-    private val liveWords: Int = 3,
-    private val lineChars: Int = 16,
-    private val liveChars: Int = 5,
+    // Long enough for the translator to have some context (short fragments translate badly),
+    // short enough that each line is translated quickly and fits the box.
+    private val lineWords: Int = 14,
+    private val liveWords: Int = 4,
+    private val lineChars: Int = 22,
+    private val liveChars: Int = 6,
 ) {
     /** Lines that are finished now, and the words still being spoken. */
     class Split(val finished: List<String>, val live: String)
