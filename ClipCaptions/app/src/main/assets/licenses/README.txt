@@ -12,3 +12,7 @@ Offline translator
   translator/fxtranslate/CLIP_CAPTIONS_CHANGES.md in the Clip Captions source.
 - Translation models: Mozilla's Firefox Translations models, downloaded to the phone when you
   choose your languages (Mozilla Public License 2.0).
+
+Clip Captions itself is free software under the GNU General Public License v3 (with an extra
+permission to combine it with Google ML Kit). Source code, full licence and credits:
+https://github.com/controlclips/ClipCaptions

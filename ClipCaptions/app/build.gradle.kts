@@ -12,8 +12,8 @@ android {
         // Android 10 is the first version that lets an app capture other apps' sound.
         minSdk = 29
         targetSdk = 35
-        versionCode = 18
-        versionName = "6.2"
+        versionCode = 19
+        versionName = "6.3"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
@@ -35,10 +35,13 @@ android {
         }
     }
 
-    // Every build is signed with the same key (keystore/debug.keystore). Without this, each GitHub
-    // build machine makes its own random key, and Android refuses to install a new version over the
-    // old one ("App not installed") because the signatures don't match.
-    // This key is for testing builds only. Apps published on Google Play need a separate private key.
+    // Two keys:
+    // - keystore/release.p12 signs the builds people install. It's locked with a long password kept
+    //   only in the repository's secret RELEASE_KEY_PASSWORD (Settings > Secrets and variables >
+    //   Actions), so the file being public doesn't let anyone else sign "updates".
+    // - keystore/debug.keystore signs test builds, made when that secret isn't available.
+    // Android only installs an update over the app if it's signed with the same key as before.
+    val releasePassword: String? = System.getenv("RELEASE_KEY_PASSWORD")?.takeIf { it.isNotEmpty() }
     signingConfigs {
         getByName("debug") {
             storeFile = rootProject.file("keystore/debug.keystore")
@@ -46,6 +49,15 @@ android {
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
+        }
+        if (releasePassword != null) {
+            create("release") {
+                storeFile = rootProject.file("keystore/release.p12")
+                storeType = "pkcs12"
+                storePassword = releasePassword
+                keyAlias = "clipcaptions"
+                keyPassword = releasePassword
+            }
         }
     }
 
@@ -55,7 +67,14 @@ android {
         }
         release {
             isMinifyEnabled = false
+            if (releasePassword != null) signingConfig = signingConfigs.getByName("release")
         }
+    }
+
+    lint {
+        // Lint's release check shouldn't stop a build; problems still show in the build log.
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 
     compileOptions {

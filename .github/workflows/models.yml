@@ -1,0 +1,31 @@
+# Keeps a copy of Mozilla's translation models on this repository's "models" release, where the
+# app downloads them from (see .github/scripts/mirror_models.py). Runs once a month to pick up
+# Mozilla's updates; only new or changed files are copied. Can also be run by hand from the
+# Actions tab, or by pushing to the models-request branch.
+name: Mirror translation models
+
+on:
+  schedule:
+    - cron: "17 3 2 * *"
+  workflow_dispatch:
+  push:
+    branches: [models-request]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-models
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy new or changed models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/mirror_models.py

@@ -411,11 +411,39 @@ class MainActivity : AppCompatActivity() {
             "Instant captions: ${googleStatus.text}",
         )
         if (speedText.visibility == View.VISIBLE) settings += speedText.text.toString()
+        val report = Diagnostics.report(this, settings)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Report a problem")
+            .setMessage(
+                "Your report opens on Clip Captions' GitHub page, filled in and ready to post. Add what " +
+                    "happened, then post it. Reports there are public, and posting needs a free GitHub " +
+                    "account. It holds your phone model, settings and any recent errors, nothing personal.",
+            )
+            .setPositiveButton("Open GitHub") { _, _ -> openIssue(report) }
+            .setNeutralButton("Share instead") { _, _ -> shareReport(report) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun openIssue(report: String) {
+        // Long crash details would make the web address too long for some browsers: keep the start.
+        val body = if (report.length > 5000) report.take(5000) + "\n…" else report
+        val url = Uri.parse(Diagnostics.ISSUES_URL).buildUpon()
+            .appendQueryParameter("title", "Problem: ")
+            .appendQueryParameter("body", body)
+            .build()
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, url))
+        } catch (e: android.content.ActivityNotFoundException) {
+            shareReport(report)
+        }
+    }
+
+    private fun shareReport(report: String) {
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_SUBJECT, "Clip Captions problem report")
-            putExtra(Intent.EXTRA_TEXT, Diagnostics.report(this@MainActivity, settings))
-            if (Diagnostics.SUPPORT_EMAIL.isNotEmpty()) putExtra(Intent.EXTRA_EMAIL, arrayOf(Diagnostics.SUPPORT_EMAIL))
+            putExtra(Intent.EXTRA_TEXT, report)
         }
         startActivity(Intent.createChooser(send, "Send the report"))
     }
