@@ -1,4 +1,4 @@
-# Copies the newest release's APK onto the "apk" branch, so it can be fetched with git.
+# Copies the newest app build's APK onto the "apk" branch, so it can be fetched with git.
 # Runs when this "apk-request" branch is pushed. It doesn't build anything.
 name: Copy the latest APK
 
@@ -17,7 +17,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir apk
+          # The newest app build, test builds (pre-releases) included; never the "models" release.
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 --json tagName \
+            --jq '[.[] | select(.tagName != "models")][0].tagName')
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir apk
           ls -l apk
 
       - name: Put it on the apk branch
