@@ -10,4 +10,6 @@
     <color name="cc_on_signal">#111733</color>
     <color name="cc_tint">#1F2A5C</color>
     <color name="cc_hero">#171D3D</color>
+    <!-- Warnings, as text (caption amber, darkened for light screens) -->
+    <color name="cc_warn">#FFC23D</color>
 </resources>
