@@ -1,13 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Clip Captions brand colours (see the brand book). -->
+<!-- Clip Captions brand colours (see the brand book). Dark-theme values are in values-night. -->
 <resources>
-    <!-- signal: buttons, links, selected states (light theme) -->
+    <!-- signal: buttons, links, selected states -->
     <color name="brand">#2F55D4</color>
-    <!-- signal in the dark theme -->
     <color name="brand_light">#9FB4FF</color>
     <!-- night: the brand's deep ink -->
     <color name="brand_ink">#111733</color>
     <color name="icon_background">#111733</color>
     <!-- subtitle: caption amber -->
     <color name="icon_accent">#FFC23D</color>
+
+    <!-- Screen colours (light theme) -->
+    <color name="cc_surface">#F4F6FB</color>
+    <color name="cc_card">#FFFFFF</color>
+    <color name="cc_line">#D9DEEC</color>
+    <color name="cc_ink">#111733</color>
+    <color name="cc_muted">#545C7A</color>
+    <color name="cc_signal">#2F55D4</color>
+    <color name="cc_on_signal">#FFFFFF</color>
+    <color name="cc_tint">#EAF0FF</color>
+    <color name="cc_hero">#111733</color>
+    <color name="cc_amber">#FFC23D</color>
+    <color name="cc_night">#111733</color>
+    <color name="cc_on_hero">#FFFFFF</color>
+    <color name="cc_on_hero_muted">#C8CDE0</color>
+    <color name="cc_clip">#2F55D4</color>
+    <color name="cc_clip_glow">#665B7CF0</color>
+    <color name="cc_caption_box">#E00E111A</color>
+    <color name="cc_caption_dim">#99FFFFFF</color>
 </resources>

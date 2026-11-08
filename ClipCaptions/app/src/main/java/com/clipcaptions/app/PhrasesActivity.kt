@@ -40,7 +40,9 @@ class PhrasesActivity : AppCompatActivity() {
             setPadding(dp(24f), dp(24f), dp(24f), dp(8f))
         }
         heading = TextView(this).apply {
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_HeadlineMedium)
+            typeface = resources.getFont(R.font.unbounded_bold)
+            textSize = 24f
+            setTextColor(getColor(R.color.cc_ink))
         }
         val note = TextView(this).apply {
             text = "Tap ☆ on the caption box to save what's being said. Tap a phrase to copy or delete it."

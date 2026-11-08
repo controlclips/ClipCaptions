@@ -24,7 +24,19 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import android.content.res.ColorStateList
+import android.graphics.Typeface
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.AbsoluteSizeSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.button.MaterialButtonToggleGroup
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
@@ -67,12 +79,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var watchLanguages: TextView
     private lateinit var watchChoose: Button
     private lateinit var watchNote: TextView
-    private lateinit var sizeSpinner: Spinner
-    private lateinit var startButton: Button
+    private lateinit var sizeGroup: MaterialButtonToggleGroup
+    private lateinit var watchChips: ChipGroup
+    private lateinit var startButton: MaterialButton
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
     private lateinit var speedText: TextView
-    private lateinit var phrasesButton: Button
+    private lateinit var phrasesCount: TextView
 
     private val io = Executors.newSingleThreadExecutor()
     private var busy = false
@@ -121,12 +134,19 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
 
+        // The dark header runs up behind the status bar, so the status bar icons are always light.
         val root = findViewById<View>(R.id.root)
+        val hero = findViewById<View>(R.id.hero)
+        val heroTop = hero.paddingTop
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            view.setPadding(bars.left, 0, bars.right, bars.bottom)
+            hero.setPadding(hero.paddingLeft, bars.top + heroTop, hero.paddingRight, hero.paddingBottom)
             insets
         }
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
+        // The sample video's glow stays inside its rounded corners.
+        (findViewById<View>(R.id.heroClip)).clipToOutline = true
 
         modeGroup = findViewById(R.id.modeGroup)
         modeGoogle = findViewById(R.id.modeGoogle)
@@ -146,26 +166,28 @@ class MainActivity : AppCompatActivity() {
         watchNote = findViewById(R.id.watchNote)
         watchChoose.setOnClickListener { if (isGoogleMode()) chooseGoogleLanguages() else chooseAutoLanguages() }
         findViewById<TextView>(R.id.versionText).text = getString(R.string.version_label, appVersion())
-        sizeSpinner = findViewById(R.id.sizeSpinner)
+        sizeGroup = findViewById(R.id.sizeGroup)
+        watchChips = findViewById(R.id.watchChips)
         startButton = findViewById(R.id.startButton)
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
         speedText = findViewById(R.id.speedText)
-        phrasesButton = findViewById(R.id.phrasesButton)
-        phrasesButton.setOnClickListener { startActivity(Intent(this, PhrasesActivity::class.java)) }
+        phrasesCount = findViewById(R.id.phrasesCount)
+        findViewById<View>(R.id.phrasesRow).setOnClickListener { startActivity(Intent(this, PhrasesActivity::class.java)) }
+        modeGoogle.text = optionText(getString(R.string.mode_google_title), getString(R.string.mode_google_desc), getString(R.string.recommended))
+        modeAuto.text = optionText(getString(R.string.mode_auto_title), getString(R.string.mode_auto_desc), null)
+        modeLive.text = optionText(getString(R.string.mode_live_title), getString(R.string.mode_live_desc), null)
         findViewById<Button>(R.id.setupButton).setOnClickListener {
             startActivity(Intent(this, SetupActivity::class.java))
         }
         findViewById<Button>(R.id.reportButton).setOnClickListener { sendReport() }
 
-        sourceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, Languages.spoken.map { it.name })
-            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        targetSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, Languages.caption.map { it.name })
-            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        speedSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, WhisperSpeed.entries.map { it.label })
-            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        sizeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, CaptionSize.entries.map { it.label })
-            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        sourceSpinner.adapter = ArrayAdapter(this, R.layout.item_spinner, Languages.spoken.map { it.name })
+            .also { it.setDropDownViewResource(R.layout.item_spinner_dropdown) }
+        targetSpinner.adapter = ArrayAdapter(this, R.layout.item_spinner, Languages.caption.map { it.name })
+            .also { it.setDropDownViewResource(R.layout.item_spinner_dropdown) }
+        speedSpinner.adapter = ArrayAdapter(this, R.layout.item_spinner, WhisperSpeed.entries.map { it.label })
+            .also { it.setDropDownViewResource(R.layout.item_spinner_dropdown) }
 
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         val savedSource = prefs.getString("source", "en")
@@ -173,7 +195,7 @@ class MainActivity : AppCompatActivity() {
         sourceSpinner.setSelection(Languages.spoken.indexOfFirst { it.code == savedSource }.coerceAtLeast(0))
         targetSpinner.setSelection(Languages.caption.indexOfFirst { it.code == savedTarget }.coerceAtLeast(0))
         speedSpinner.setSelection(WhisperSpeed.entries.indexOf(WhisperSpeed.fromKey(prefs.getString("speed", null))))
-        sizeSpinner.setSelection(CaptionSize.entries.indexOf(CaptionSize.fromKey(prefs.getString("caption_size", null))))
+        sizeGroup.check(sizeButtonFor(CaptionSize.fromKey(prefs.getString("caption_size", null))))
 
         // Google is the default once the phone is found to support it (checked just below).
         val savedMode = prefs.getString("mode", null)
@@ -206,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             }
             prefs.edit()
                 .putString("mode", mode)
-                .putString("caption_size", CaptionSize.entries[sizeSpinner.selectedItemPosition.coerceAtLeast(0)].key)
+                .putString("caption_size", selectedSize().key)
                 .putString("source", selectedSpoken().code)
                 .putString("target", selectedCaption().code)
                 .putString("speed", selectedSpeed().key)
@@ -224,7 +246,7 @@ class MainActivity : AppCompatActivity() {
         sourceSpinner.onItemSelectedListener = onChange
         targetSpinner.onItemSelectedListener = onChange
         speedSpinner.onItemSelectedListener = onChange
-        sizeSpinner.onItemSelectedListener = onChange
+        sizeGroup.addOnButtonCheckedListener { _, _, isChecked -> if (isChecked) save() }
 
         startButton.setOnClickListener {
             if (CaptionService.isRunning) stopCaptions() else startCaptions()
@@ -250,7 +272,59 @@ class MainActivity : AppCompatActivity() {
         }
         showSpeed()
         val saved = PhraseBook.count(this)
-        phrasesButton.text = if (saved == 0) getString(R.string.my_phrases) else "${getString(R.string.my_phrases)} ($saved)"
+        phrasesCount.text = if (saved == 0) "" else saved.toString()
+    }
+
+    /** An option card's text: its name in bold (with an optional badge), then a line saying what it does. */
+    private fun optionText(title: String, description: String, badge: String?): CharSequence {
+        val text = SpannableStringBuilder()
+        val start = text.length
+        text.append(title)
+        text.setSpan(StyleSpan(Typeface.BOLD), start, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        text.setSpan(ForegroundColorSpan(getColor(R.color.cc_ink)), start, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (badge != null) {
+            text.append("  ")
+            val b = text.length
+            text.append(" $badge ")
+            text.setSpan(PillSpan(getColor(R.color.cc_amber), getColor(R.color.cc_night)), b, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        text.append("\n")
+        val d = text.length
+        text.append(description)
+        text.setSpan(ForegroundColorSpan(getColor(R.color.cc_muted)), d, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        text.setSpan(AbsoluteSizeSpan(14, true), d, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return text
+    }
+
+    private fun sizeButtonFor(size: CaptionSize) = when (size) {
+        CaptionSize.SMALL -> R.id.sizeSmall
+        CaptionSize.MEDIUM -> R.id.sizeMedium
+        CaptionSize.LARGE -> R.id.sizeLarge
+    }
+
+    private fun selectedSize(): CaptionSize = when (sizeGroup.checkedButtonId) {
+        R.id.sizeSmall -> CaptionSize.SMALL
+        R.id.sizeLarge -> CaptionSize.LARGE
+        else -> CaptionSize.MEDIUM
+    }
+
+    /** The languages you watch, as chips. */
+    private fun showWatchChips(names: List<String>) {
+        watchChips.removeAllViews()
+        for (name in names) {
+            val chip = Chip(this).apply {
+                text = name
+                isClickable = false
+                isCheckable = false
+                typeface = resources.getFont(R.font.atkinson)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(getColor(R.color.cc_signal))
+                chipBackgroundColor = ColorStateList.valueOf(getColor(R.color.cc_tint))
+                chipStrokeWidth = 0f
+            }
+            watchChips.addView(chip)
+        }
+        watchChips.visibility = if (names.isEmpty()) View.GONE else View.VISIBLE
     }
 
     /** Opens the share sheet with a problem report: a space to describe it, then details about the phone and app. */
@@ -263,7 +337,7 @@ class MainActivity : AppCompatActivity() {
         val settings = mutableListOf(
             "Mode: $mode",
             "Translate into: ${selectedCaption().name}",
-            "Languages I watch: ${watchLanguages.text.ifEmpty { "-" }}",
+            "Languages I watch: ${watchedNames.ifEmpty { "-" }}",
             "Instant captions: ${googleStatus.text}",
         )
         if (speedText.visibility == View.VISIBLE) settings += speedText.text.toString()
@@ -343,6 +417,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             showModeSections()
+            styleOptions()
             if (!busy && !CaptionService.isRunning) setStatus(describeChoice())
         }
     }
@@ -377,13 +452,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun showGoogleLanguages() {
         val chosen = chosenGoogleLanguages()
-        val names = chosen.joinToString(", ") { GoogleSpeech.displayName(it) }
-        watchLanguages.text = when {
-            chosen.isEmpty() -> "None yet."
-            chosen.size == 1 -> names
-            WhisperLib.available || Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> names
-            else -> "$names. Switching between them needs Android 14, so it listens for ${GoogleSpeech.displayName(chosen.first())}."
-        }
+        showWatchChips(chosen.map { GoogleSpeech.displayName(it) })
+        watchedNames = chosen.joinToString(", ") { GoogleSpeech.displayName(it) }
+        setWatchNote(
+            when {
+                chosen.isEmpty() -> "None yet. Tap Choose languages."
+                chosen.size == 1 || WhisperLib.available || Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> null
+                else -> "Switching between them needs Android 14, so it listens for ${GoogleSpeech.displayName(chosen.first())}."
+            },
+        )
+    }
+
+    private var watchedNames = ""
+
+    /** A short note under the language chips, or nothing. */
+    private fun setWatchNote(note: String?) {
+        watchLanguages.text = note ?: ""
+        watchLanguages.visibility = if (note == null) View.GONE else View.VISIBLE
     }
 
     /** Lets you tick every language you watch, then downloads them once. */
@@ -499,11 +584,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAutoLanguages() {
         val chosen = chosenAutoLanguages()
-        watchLanguages.text = if (chosen.isEmpty()) {
-            "None yet. Any language still works."
-        } else {
-            chosen.joinToString(", ") { Languages.nameFor(it) }
-        }
+        showWatchChips(chosen.map { Languages.nameFor(it) })
+        watchedNames = chosen.joinToString(", ") { Languages.nameFor(it) }
+        setWatchNote(if (chosen.isEmpty()) "None yet. Any language still works." else null)
     }
 
     /** Lets you tick the languages you watch, then downloads their translations once. */
@@ -869,14 +952,29 @@ class MainActivity : AppCompatActivity() {
         val editable = !busy && !running
         startButton.text = if (running) "Stop captions" else "Start captions"
         startButton.isEnabled = !busy
+        // Amber to start; a quieter outlined button once captions are on.
+        if (running) {
+            startButton.backgroundTintList = ColorStateList.valueOf(0x26FFFFFF)
+            startButton.setTextColor(0xFFFFFFFF.toInt())
+        } else {
+            startButton.backgroundTintList = ColorStateList.valueOf(getColor(R.color.cc_amber))
+            startButton.setTextColor(getColor(R.color.cc_night))
+        }
+        startButton.alpha = if (busy) 0.6f else 1f
         modeGoogle.isEnabled = editable && googleSupport is GoogleSpeech.Support.Ready
         modeAuto.isEnabled = editable && WhisperLib.available
         modeLive.isEnabled = editable
         watchChoose.isEnabled = editable
-        sizeSpinner.isEnabled = editable
+        for (i in 0 until sizeGroup.childCount) sizeGroup.getChildAt(i).isEnabled = editable
         sourceSpinner.isEnabled = editable
         targetSpinner.isEnabled = editable
         speedSpinner.isEnabled = editable
+        styleOptions()
+    }
+
+    /** Options that can't be chosen right now are faded. */
+    private fun styleOptions() {
+        for (option in listOf(modeGoogle, modeAuto, modeLive)) option.alpha = if (option.isEnabled) 1f else 0.5f
     }
 
     private fun spotterIfDownloaded(): String? =

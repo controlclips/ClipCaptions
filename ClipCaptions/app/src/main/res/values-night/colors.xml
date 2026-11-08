@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Screen colours (dark theme). -->
+<resources>
+    <color name="cc_surface">#0C1026</color>
+    <color name="cc_card">#171D3D</color>
+    <color name="cc_line">#2A3158</color>
+    <color name="cc_ink">#EEF1FA</color>
+    <color name="cc_muted">#A9B1CC</color>
+    <color name="cc_signal">#9FB4FF</color>
+    <color name="cc_on_signal">#111733</color>
+    <color name="cc_tint">#1F2A5C</color>
+    <color name="cc_hero">#171D3D</color>
+</resources>

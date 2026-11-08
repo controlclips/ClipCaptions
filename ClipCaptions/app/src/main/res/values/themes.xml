@@ -1,7 +1,84 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.ClipCaptions" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/brand</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimary">@color/cc_signal</item>
+        <item name="colorOnPrimary">@color/cc_on_signal</item>
+        <item name="colorSurface">@color/cc_surface</item>
+        <item name="colorOnSurface">@color/cc_ink</item>
+        <item name="android:colorBackground">@color/cc_surface</item>
+        <item name="android:windowBackground">@color/cc_surface</item>
+        <item name="android:textColorPrimary">@color/cc_ink</item>
+        <item name="android:textColorSecondary">@color/cc_muted</item>
+        <item name="android:fontFamily">@font/atkinson</item>
+        <item name="fontFamily">@font/atkinson</item>
+    </style>
+
+    <!-- Type: Unbounded for the name and headlines, Atkinson Hyperlegible for everything else. -->
+    <style name="CC.Text" parent="">
+        <item name="android:fontFamily">@font/atkinson</item>
+        <item name="android:textColor">@color/cc_ink</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:lineSpacingMultiplier">1.15</item>
+    </style>
+    <style name="CC.Text.Brand">
+        <item name="android:fontFamily">@font/unbounded_bold</item>
+        <item name="android:textColor">@color/cc_on_hero</item>
+        <item name="android:textSize">21sp</item>
+    </style>
+    <style name="CC.Text.Section">
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">18sp</item>
+    </style>
+    <style name="CC.Text.Strong">
+        <item name="android:textStyle">bold</item>
+    </style>
+    <style name="CC.Text.Small">
+        <item name="android:textColor">@color/cc_muted</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+    <style name="CC.Text.OnHero">
+        <item name="android:textColor">@color/cc_on_hero_muted</item>
+    </style>
+    <style name="CC.Text.Label">
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">10sp</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:textColor">@color/cc_caption_dim</item>
+    </style>
+    <style name="CC.Card" parent="">
+        <item name="android:background">@drawable/bg_card</item>
+        <item name="android:padding">16dp</item>
+        <item name="android:layout_marginStart">16dp</item>
+        <item name="android:layout_marginEnd">16dp</item>
+        <item name="android:layout_marginBottom">10dp</item>
+        <item name="android:orientation">vertical</item>
+    </style>
+    <style name="CC.Option" parent="">
+        <item name="android:background">@drawable/bg_option</item>
+        <item name="android:buttonTint">@color/cc_signal</item>
+        <item name="android:fontFamily">@font/atkinson</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">14dp</item>
+        <item name="android:paddingTop">14dp</item>
+        <item name="android:paddingBottom">14dp</item>
+        <item name="android:layout_marginStart">16dp</item>
+        <item name="android:layout_marginEnd">16dp</item>
+        <item name="android:layout_marginBottom">10dp</item>
+        <item name="android:minHeight">64dp</item>
+        <item name="android:lineSpacingMultiplier">1.15</item>
+    </style>
+    <style name="CC.Field" parent="">
+        <item name="android:background">@drawable/bg_field</item>
+        <item name="android:minHeight">52dp</item>
+        <item name="android:layout_marginTop">8dp</item>
+    </style>
+    <style name="CC.LinkButton" parent="Widget.Material3.Button.TextButton">
+        <item name="android:fontFamily">@font/atkinson</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/cc_signal</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
     </style>
 </resources>

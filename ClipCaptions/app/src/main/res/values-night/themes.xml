@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Colours switch through values-night/colors.xml; the theme is the same. -->
     <style name="Theme.ClipCaptions" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/brand_light</item>
-        <item name="colorOnPrimary">@color/brand_ink</item>
+        <item name="colorPrimary">@color/cc_signal</item>
+        <item name="colorOnPrimary">@color/cc_on_signal</item>
+        <item name="colorSurface">@color/cc_surface</item>
+        <item name="colorOnSurface">@color/cc_ink</item>
+        <item name="android:colorBackground">@color/cc_surface</item>
+        <item name="android:windowBackground">@color/cc_surface</item>
+        <item name="android:textColorPrimary">@color/cc_ink</item>
+        <item name="android:textColorSecondary">@color/cc_muted</item>
+        <item name="android:fontFamily">@font/atkinson</item>
+        <item name="fontFamily">@font/atkinson</item>
     </style>
 </resources>

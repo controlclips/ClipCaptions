@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An option card: picked ones get a signal outline on a tint. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/cc_tint" />
+            <stroke android:width="2dp" android:color="@color/cc_signal" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/bg_card" />
+</selector>
