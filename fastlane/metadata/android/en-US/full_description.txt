@@ -7,7 +7,9 @@ Clip Captions shows what people say in TikTok, Reels, Shorts and other videos as
 • Swipe to the next video and the captions clear.
 • Tap ☆ to save a phrase, then find it in My phrases to copy, share or learn.
 • Saves battery: it pauses when nothing is playing.
+• Good offline translation: Mozilla's translator, the one built into Firefox, running on your phone.
 • Free, and nothing is recorded or uploaded. Speech recognition and translation run on your phone.
+• Open source (GPL-3.0), with no adverts, accounts or tracking.
 
 Languages download once, before captions start, so nothing downloads while you're scrolling.
 

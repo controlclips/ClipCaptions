@@ -26,6 +26,9 @@ object MozModels {
     private const val RECORDS =
         "https://firefox.settings.services.mozilla.com/v1/buckets/main/collections/translations-models-v2/records"
     private const val CDN = "https://firefox-settings-attachments.cdn.mozilla.net/"
+    // Clip Captions' own copy of the models (Mozilla asks apps not to rely on Firefox's servers),
+    // kept up to date by .github/workflows/models.yml. Mozilla's servers are the fallback.
+    private const val MIRROR = "https://github.com/controlclips/ClipCaptions/releases/download/models/"
     // Model versions this app's translator reads (3.x). A new major version needs a new app.
     private const val SUPPORTED_MAJOR = 3
 
@@ -137,7 +140,7 @@ object MozModels {
         val version: List<Int>,
         val preRelease: Boolean,
         val architecture: String,
-        val location: String,
+        val url: String,
         val size: Long,
         val sha256: String?,
     )
@@ -145,37 +148,84 @@ object MozModels {
     private fun dir(context: Context, leg: Leg) = File(context.filesDir, "mozilla/${leg.key}")
 
     private fun downloadLeg(context: Context, leg: Leg, onPercent: (Int) -> Unit) {
-        val items = latestFiles(leg)
+        val mirrored = try {
+            mirrorFiles(leg)
+        } catch (e: Exception) {
+            null
+        }
+        if (mirrored != null) {
+            try {
+                install(context, leg, mirrored, onPercent)
+                return
+            } catch (e: IOException) {
+                // The copy couldn't be fetched: try Mozilla's servers instead.
+            }
+        }
+        install(context, leg, mozillaFiles(leg), onPercent)
+    }
+
+    private fun install(context: Context, leg: Leg, items: Map<String, Item>, onPercent: (Int) -> Unit) {
         if (items["model"] == null || (items["vocab"] == null && (items["srcvocab"] == null || items["trgvocab"] == null))) {
-            throw IOException("Mozilla has no complete model for ${leg.key}")
+            throw IOException("there's no complete model for ${leg.key}")
         }
         val dir = dir(context, leg)
         dir.deleteRecursively()
         dir.mkdirs()
         val total = items.values.sumOf { it.size.coerceAtLeast(1) }
         var done = 0L
-        for (item in items.values) {
-            val packed = File(dir, FILE_TYPES.getValue(item.type) + ".zst")
-            Downloads.download(CDN + item.location, packed) { percent ->
-                onPercent(((done + item.size * percent / 100) * 100 / total).toInt())
+        try {
+            for (item in items.values) {
+                val packed = File(dir, FILE_TYPES.getValue(item.type) + ".zst")
+                Downloads.download(item.url, packed) { percent ->
+                    onPercent(((done + item.size * percent / 100) * 100 / total).toInt())
+                }
+                val problem = MozTranslate.nativeUnpack(packed.path, File(dir, FILE_TYPES.getValue(item.type)).path, item.sha256)
+                packed.delete()
+                if (problem != null) throw IOException("the ${leg.key} ${item.type} file didn't unpack: $problem")
+                done += item.size.coerceAtLeast(1)
             }
-            val problem = MozTranslate.nativeUnpack(packed.path, File(dir, FILE_TYPES.getValue(item.type)).path, item.sha256)
-            packed.delete()
-            if (problem != null) {
-                dir.deleteRecursively()
-                throw IOException("the ${leg.key} ${item.type} file didn't unpack: $problem")
-            }
-            done += item.size.coerceAtLeast(1)
+        } catch (e: IOException) {
+            dir.deleteRecursively()
+            throw e
         }
         File(dir, READY).writeText(items.getValue("model").version.joinToString("."))
         onPercent(100)
     }
 
+    // The mirror's list of files, fetched once per run of the app.
+    @Volatile
+    private var mirrorList: JSONObject? = null
+
+    /** [leg]'s files on Clip Captions' own copy, or null if it isn't there. */
+    private fun mirrorFiles(leg: Leg): Map<String, Item>? {
+        val list = mirrorList ?: JSONObject(fetch(MIRROR + "models.json")).also { mirrorList = it }
+        val entries = list.optJSONObject("pairs")?.optJSONArray(leg.key) ?: return null
+        val items = LinkedHashMap<String, Item>()
+        for (i in 0 until entries.length()) {
+            val entry = entries.optJSONObject(i) ?: continue
+            val type = entry.optString("type")
+            if (type !in FILE_TYPES) continue
+            val versionText = entry.optString("version")
+            val version = versionText.split('.').map { part -> part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0 }
+            if (version.firstOrNull() != SUPPORTED_MAJOR) return null
+            items[type] = Item(
+                type = type,
+                version = version,
+                preRelease = versionText.any { it.isLetter() },
+                architecture = entry.optString("architecture"),
+                url = MIRROR + entry.optString("asset"),
+                size = entry.optLong("size", 0L),
+                sha256 = entry.optString("sha256").takeIf { it.isNotEmpty() },
+            )
+        }
+        return items.takeIf { it.isNotEmpty() }
+    }
+
     /**
-     * The files Mozilla lists for [leg]: the newest model meant for Android release builds, and the
-     * vocabulary and word list that go with it.
+     * The files Mozilla's servers list for [leg]: the newest model meant for Android release builds,
+     * and the vocabulary and word list that go with it. (The mirror picks the same ones.)
      */
-    private fun latestFiles(leg: Leg): Map<String, Item> {
+    private fun mozillaFiles(leg: Leg): Map<String, Item> {
         val body = try {
             fetch("$RECORDS?sourceLanguage=${leg.src}&targetLanguage=${leg.trg}")
         } catch (e: IOException) {
@@ -199,7 +249,7 @@ object MozModels {
                 version = version,
                 preRelease = versionText.any { it.isLetter() },
                 architecture = record.optString("architecture"),
-                location = location,
+                url = CDN + location,
                 size = attachment.optLong("size", 0L),
                 sha256 = record.optString("decompressedHash").takeIf { it.isNotEmpty() },
             )

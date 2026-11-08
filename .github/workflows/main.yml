@@ -1,5 +1,6 @@
 # Builds Clip Captions and puts the APK on the repository's Releases page as a plain .apk file,
-# so it can be downloaded straight onto a phone (no zip, no Google Drive).
+# so it can be downloaded straight onto a phone (no zip, no Google Drive). Orion Store picks up
+# new versions from here too.
 #
 # This file must live at the TOP of the repository, in .github/workflows/.
 # It finds the app by itself, whether its files are in a ClipCaptions folder or at the top,
@@ -9,6 +10,8 @@ name: Build APK
 
 on:
   push:
+    # models-request only starts the model mirror (models.yml), not an app build.
+    branches-ignore: [models-request]
   workflow_dispatch:
 
 permissions:
@@ -87,20 +90,37 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # With the RELEASE_KEY_PASSWORD secret: a release build signed with the private key, the one
+      # people install. Without it (a fork, say): a test build signed with the test key, published
+      # as a pre-release so it never becomes the "latest" download.
       - name: Build the app
+        id: build
         working-directory: ${{ steps.find.outputs.dir }}
+        env:
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          if [ -n "$RELEASE_KEY_PASSWORD" ]; then
+            ./gradlew assembleRelease --no-daemon
+            echo "apk=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+            echo "kind=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The RELEASE_KEY_PASSWORD secret isn't set, so this is a test build signed with the test key."
+            ./gradlew assembleDebug --no-daemon
+            echo "apk=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "kind=test" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Name the APK after its version
         id: apk
         env:
           DIR: ${{ steps.find.outputs.dir }}
           VERSION: ${{ steps.find.outputs.version }}
+          BUILT: ${{ steps.build.outputs.apk }}
+          KIND: ${{ steps.build.outputs.kind }}
         run: |
-          file="ClipCaptions-$VERSION.apk"
-          cp "$DIR/app/build/outputs/apk/debug/app-debug.apk" "$file"
+          if [ "$KIND" = "release" ]; then file="ClipCaptions-$VERSION.apk"; else file="ClipCaptions-$VERSION-test.apk"; fi
+          cp "$DIR/$BUILT" "$file"
           echo "file=$file" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
@@ -113,16 +133,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.find.outputs.version }}
           APK: ${{ steps.apk.outputs.file }}
+          KIND: ${{ steps.build.outputs.kind }}
         run: |
-          tag="v$VERSION-build$GITHUB_RUN_NUMBER"
-          gh release create "$tag" "$APK" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Clip Captions $VERSION (build $GITHUB_RUN_NUMBER)" \
-            --notes "On your phone, tap $APK under Assets to download it, then open it to install. It installs over the previous version." \
-            --latest
-          # Keep only the five newest builds on the Releases page.
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[5:][].tagName' |
+          if [ "$KIND" = "release" ]; then
+            tag="v$VERSION-build$GITHUB_RUN_NUMBER"
+            gh release create "$tag" "$APK" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Clip Captions $VERSION" \
+              --notes "Tap $APK under Assets to download it, then open it to install. Updates install over the previous version and keep your settings. Needs Android 10 or newer." \
+              --latest
+          else
+            tag="v$VERSION-test$GITHUB_RUN_NUMBER"
+            gh release create "$tag" "$APK" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Clip Captions $VERSION (test build)" \
+              --notes "Test build, signed with the test key. It won't install over the normal app: use the latest release instead." \
+              --prerelease
+          fi
+          # Keep the five newest app builds. The "models" release (the translation model mirror) stays.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            --jq '[.[] | select(.tagName != "models")][5:][].tagName' |
             while read -r old; do
               gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
             done

@@ -29,8 +29,8 @@ object Diagnostics {
     private const val KEY_STOPPED_FOR_BATTERY = "stopped_for_battery"
     private const val MAX_PROBLEMS = 10
 
-    /** Where reports go. Empty: the user picks how to send it (email, WhatsApp, …) in the share sheet. */
-    const val SUPPORT_EMAIL = ""
+    /** Where reports go: a new issue on the app's GitHub page, filled in, for the person to post. */
+    const val ISSUES_URL = "https://github.com/controlclips/ClipCaptions/issues/new"
 
     /** Records a problem the user saw, such as "Captions stopped: …". */
     fun note(context: Context, problem: String) {
