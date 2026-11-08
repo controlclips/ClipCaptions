@@ -1,0 +1,42 @@
+# Reports what's on the "models" release (the translation model mirror) onto the
+# mirror-check-out branch, so it can be checked with git. Doesn't change anything else.
+name: Check the model mirror
+
+on:
+  push:
+    branches: [mirror-check]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Look at the models release and the mirror runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow models.yml --limit 3 > out/runs.txt 2>&1 || true
+          id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow models.yml --limit 1 --json databaseId --jq '.[0].databaseId' || true)
+          [ -n "$id" ] && gh run view "$id" --repo "$GITHUB_REPOSITORY" --log 2>&1 | tail -60 > out/last-run-log.txt || true
+          rid=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/models" --jq .id)
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$rid/assets?per_page=100" --jq '.[] | "\(.size)\t\(.name)"' > out/assets.txt
+          wc -l out/assets.txt > out/summary.txt
+          awk -F'\t' '{s+=$1} END {printf "%.2f GB\n", s/1e9}' out/assets.txt >> out/summary.txt
+          gh release download models --repo "$GITHUB_REPOSITORY" --pattern models.json --dir out || echo "no models.json" >> out/summary.txt
+          python3 -c "import json;d=json.load(open('out/models.json'));print(len(d['pairs']),'pairs in models.json');print(d['pairs'].get('es-en'))" >> out/summary.txt 2>&1 || true
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 10 > out/releases.txt
+      - name: Publish
+        if: always()
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p out && cd out
+          git init -q -b mirror-check-out
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Mirror check ($GITHUB_SHA)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" mirror-check-out
