@@ -1,0 +1,33 @@
+# Copies the newest release's APK onto the "apk" branch, so it can be fetched with git.
+# Runs when this "apk-request" branch is pushed. It doesn't build anything.
+name: Copy the latest APK
+
+on:
+  push:
+    branches: [apk-request]
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the newest release's APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir apk
+          ls -l apk
+
+      - name: Put it on the apk branch
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd apk
+          git init -q -b apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Latest APK: $(ls *.apk)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" apk
