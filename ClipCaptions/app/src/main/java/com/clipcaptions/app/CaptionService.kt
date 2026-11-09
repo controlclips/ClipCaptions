@@ -1399,7 +1399,7 @@ class CaptionService : Service() {
         liveInFlight = true
         val generation = liveGeneration
         val askedAt = pendingLiveAt
-        tr.translate(text).addOnCompleteListener { task ->
+        tr.translate(text, finished = false).addOnCompleteListener { task ->
             liveInFlight = false
             if (generation == liveGeneration && task.isSuccessful) {
                 liveTranslatedFrom = text

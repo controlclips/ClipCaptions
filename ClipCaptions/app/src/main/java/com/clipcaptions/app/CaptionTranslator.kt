@@ -25,7 +25,22 @@ class CaptionTranslator private constructor(
     /** True when Mozilla's translator does the work. */
     val usesMozilla: Boolean get() = legs != null
 
-    fun translate(text: String): Task<String> {
+    /**
+     * Translates [text]. [finished] is false for the words still being spoken, so they aren't given a
+     * full stop yet (see [TranslationText]).
+     */
+    fun translate(text: String, finished: Boolean = true): Task<String> {
+        val input = TranslationText.prepare(text, source, finished)
+        if (input.isEmpty()) return Tasks.forResult(text)
+        return translateRaw(input).continueWith { task ->
+            // Fails here too if the translation failed, so callers' failure handling still runs.
+            val out = TranslationText.tidy(task.result, input)
+            if (out.isEmpty()) throw IllegalStateException("empty translation")
+            out
+        }
+    }
+
+    private fun translateRaw(text: String): Task<String> {
         val route = legs ?: return mlkitTranslate(text)
         if (!mlkitSupported) return MozEngines.translate(context, route, text)
         // If Mozilla's files turn out to be unusable, fall back to ML Kit rather than show nothing.

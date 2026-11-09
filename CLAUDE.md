@@ -26,6 +26,8 @@ plus native code (whisper.cpp in C/C++, Mozilla's translator in Rust). Public re
   - `VoskModels.kt` **Basic** mode (Vosk).
   - `VideoSwitch.kt` pure logic (swipe detection, chunking, language pick, leftover words, line splitting, speed stats). Tested by `ClipCaptions/tools/logic-tests/run.sh`.
   - `CaptionTranslator.kt` translation front door: Mozilla when its files are on the phone, else ML Kit.
+    Every caption goes through `TranslationText.kt` (pure logic, also in logic-tests): capital and full
+    stop added before translating, stuck repeats removed after.
   - `MozTranslate.kt` (JNI + picks the i8mm or plain-NEON library from /proc/cpuinfo; `MozEngines` loads pairs on one thread), `MozModels.kt` (routes via English, downloads from the repo's `models` release first, Mozilla's CDN second), `MozCatalogue.kt` (pairs Mozilla publishes).
   - `CaptionOverlay.kt`, `PhraseBook.kt`/`PhrasesActivity.kt` (☆ saved phrases), `SetupActivity.kt` (first-time guide), `Diagnostics.kt` (crash saver, Report a problem → GitHub issue).
 - `ClipCaptions/whisperfast/` second whisper build for ARMv8.2 dotprod phones.
