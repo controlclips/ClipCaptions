@@ -195,6 +195,8 @@ class CaptionService : Service() {
 
     // Auto mode
     private var lastLanguage = ""
+    // Any language mode: the pieces of the sentence being heard, translated again whole once it ends.
+    private val sentencePieces = SentenceJoiner()
     private val translators = HashMap<String, CaptionTranslator>()
     // Languages whose translation is on the phone. Read by the Whisper thread too.
     private val readyLanguages: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
@@ -475,6 +477,7 @@ class CaptionService : Service() {
             forgetLiveTranslation()
         } else if (autoMode) {
             lastLanguage = ""
+            sentencePieces.reset()
             pendingChunks.clear()
             // Stop working on the old video's speech, so the new video's comes through sooner.
             if (WhisperLib.available) WhisperLib.nativeCancel()
@@ -1140,17 +1143,28 @@ class CaptionService : Service() {
 
         val text = result.text
         if (result.translatedByWhisper || language.isEmpty()) {
+            sentencePieces.reset()
             box.addLine(text, false)
             // Whisper stood in because this language's translation isn't on the phone: fetch it quietly.
             if (result.translatedByWhisper) translatorFor(language)?.let { prepareTranslation(language, it) }
             return
         }
-        showLine(box, text, language)
+        val id = showLine(box, text, language)
+        if (id == null) {
+            sentencePieces.reset()
+            return
+        }
+        // A sentence heard in pieces is translated again whole once it ends, replacing the halves.
+        val whole = sentencePieces.add(id, text, language, result.video, SystemClock.elapsedRealtime()) ?: return
+        val tr = translatorFor(language) ?: return
+        tr.translate(whole.text).addOnSuccessListener { translated ->
+            if (result.video == video.get()) overlay?.mergeLines(whole.lines, whole.text, translated)
+        }
     }
 
     /**
      * Shows a finished sentence heard in [language], translated into the caption language when
-     * needed (Google and Auto modes).
+     * needed (Google and Auto modes). Returns the line's id when it's being translated, else null.
      */
     private fun showLine(
         box: CaptionOverlay,
@@ -1158,23 +1172,23 @@ class CaptionService : Service() {
         language: String,
         exact: String? = null,
         provisional: String? = null,
-    ) {
+    ): Int? {
         if (language == targetCode) {
             box.addLine(text, false)
-            return
+            return null
         }
         val tr = translatorFor(language)
         if (tr == null) {
             // A language the translator doesn't cover: show the words as heard.
             box.addLine(text, false)
-            return
+            return null
         }
         if (language in readyLanguages) {
             val id = box.addLine(text, true)
             if (exact != null) {
                 // Already translated while it was being spoken.
                 box.setTranslation(id, exact)
-                return
+                return id
             }
             if (provisional != null) box.setTranslation(id, provisional)
             val askedAt = SystemClock.elapsedRealtime()
@@ -1184,12 +1198,13 @@ class CaptionService : Service() {
                     overlay?.setTranslation(id, translated)
                 }
                 .addOnFailureListener { if (provisional == null) overlay?.setTranslation(id, text) }
-            return
+            return id
         }
         // A language you didn't tick, heard for the first time: show the words as heard straight away,
         // and fetch its translation in the background. Nothing waits for the download.
         box.addLine(text, false)
         prepareTranslation(language, tr)
+        return null
     }
 
     /**

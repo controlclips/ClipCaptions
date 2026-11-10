@@ -5,11 +5,11 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 app="$here/../../app/src/main/java/com/clipcaptions/app"
-src=("$app/VideoSwitch.kt" "$app/TranslationText.kt")
+src=("$app/VideoSwitch.kt" "$app/TranslationText.kt" "$app/SentenceJoiner.kt")
 out=$(mktemp -d)
 for test in "$here"/*Test.kt; do
   name=$(basename "$test" .kt)
-  kotlinc -nowarn "$test" "${src[@]}" -include-runtime -d "$out/$name.jar" 2>/dev/null
+  kotlinc -nowarn "$test" "${src[@]}" -include-runtime -d "$out/$name.jar"
   echo "== $name"
   java -jar "$out/$name.jar"
 done

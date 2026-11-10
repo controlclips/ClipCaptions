@@ -323,6 +323,18 @@ class CaptionOverlay(
         return line.id
     }
 
+    /**
+     * Replaces the lines [ids] (the pieces of one sentence) with the whole sentence and its translation,
+     * where the first of them still is. Does nothing if they've all scrolled away.
+     */
+    fun mergeLines(ids: List<Int>, original: String, translated: String) {
+        val at = lines.indexOfFirst { it.id in ids }
+        if (at < 0) return
+        lines.removeAll { it.id in ids }
+        lines.add(at, Line(nextId++, original, false, translated))
+        render()
+    }
+
     fun setTranslation(id: Int, translated: String) {
         val line = lines.firstOrNull { it.id == id } ?: return
         line.translated = translated

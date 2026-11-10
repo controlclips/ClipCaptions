@@ -88,6 +88,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The caption logic tests (line splitting, sentence joining, tidying text for the translator).
+      # A failure stops the build, so a broken APK never reaches the Releases page.
+      - name: Run the logic tests
+        working-directory: ${{ steps.find.outputs.dir }}
+        run: |
+          if ! command -v kotlinc >/dev/null; then
+            curl -sSL -o /tmp/kotlinc.zip https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+            unzip -q /tmp/kotlinc.zip -d /tmp
+            export PATH="/tmp/kotlinc/bin:$PATH"
+          fi
+          bash tools/logic-tests/run.sh
+
       - uses: gradle/actions/setup-gradle@v4
 
       # With the RELEASE_KEY_PASSWORD secret: a release build signed with the private key, the one
