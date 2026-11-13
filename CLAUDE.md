@@ -70,7 +70,8 @@ plus native code (whisper.cpp in C/C++, Mozilla's translator in Rust). Public re
   `cargo build` in `ClipCaptions/translator` (host), `gcc -fsyntax-only` for the JNI C.
 - Before handing over an APK: check its signing certificate matches the previous build, that
   `lib/*/libcctranslate*.so` and `libclipwhisper*.so` are present, and the version.
-- Test-key cert sha256: `e0a5017631f2c6999f0c1dd25e4bf767cc72f02692963773eb66ab345f4a7db8`.
+- Release-key cert sha256 (proper releases, from 6.6): `0c58ee0bf575605d6204b585452844fc957dbf19ca12518b4adb2d25cba68385`.
+- Test-key cert sha256 (test builds): `e0a5017631f2c6999f0c1dd25e4bf767cc72f02692963773eb66ab345f4a7db8`.
 
 ## Don't
 
@@ -79,10 +80,12 @@ plus native code (whisper.cpp in C/C++, Mozilla's translator in Rust). Public re
 - Commit secrets, change or regenerate `release.p12`, or delete the `models` release.
 - Ship the stock fxtranslate aarch64 build alone (i8mm only: crashes phones without it).
 
-## Open items (as of 6.3, November 2026)
+## Open items (as of 6.6, 13 November 2026)
 
-- Owner to add `RELEASE_KEY_PASSWORD`, make the repo public, then a signed 6.3 build; owner
-  uninstalls the test-key app once.
-- Phone screenshots into `fastlane/metadata/android/en-US/images/phoneScreenshots/`, then the
-  owner submits to Orion Store.
-- 6.2/6.3 (Mozilla translator) not yet confirmed on a real phone.
+- Done: `RELEASE_KEY_PASSWORD` added, repo public, first signed release 6.6 (v6.6-build23),
+  screenshots 1_main.jpg and 2_languages.jpg in `fastlane/metadata/android/en-US/images/phoneScreenshots/`.
+- Orion Store submission not posted yet: an issue on RookieEnough/Orion-Data titled
+  "App Submission [1 App] - Clip Captions" with the JSON format Orion's app generates
+  (name, id, description, icon, repoUrl, githubRepo, releaseKeyword "apk", packageName,
+  category "Education", author, screenshots, platform). Owner may add a third screenshot
+  (captions over a video with no recognisable person).
