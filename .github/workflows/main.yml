@@ -10,8 +10,8 @@ name: Build APK
 
 on:
   push:
-    # models-request only starts the model mirror (models.yml), not an app build.
-    branches-ignore: [models-request]
+    # These only start the model mirror (models.yml) or the download count (stats.yml).
+    branches-ignore: [models-request, stats-request]
   workflow_dispatch:
 
 permissions:
@@ -164,9 +164,17 @@ jobs:
               --notes "Test build, signed with the test key. It won't install over the normal app: use the latest release instead." \
               --prerelease
           fi
-          # Keep the five newest app builds. The "models" release (the translation model mirror) stays.
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
-            --jq '[.[] | select(.tagName != "models")][5:][].tagName' |
+          # Tidy up old builds:
+          # - keep the five newest test builds (pre-releases) and delete older ones;
+          # - keep every proper release from 6.3 on: their download counts feed DOWNLOADS.md
+          #   (stats.yml), and people can go back a version if they need to;
+          # - delete releases before 6.3, which were all signed with the test key.
+          # The "models" release (the translation model mirror) always stays.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease \
+            --jq '([.[] | select(.isPrerelease and .tagName != "models")][5:][].tagName),
+                  (.[] | select((.isPrerelease | not) and .tagName != "models")
+                       | select((.tagName | ltrimstr("v") | split("-")[0] | split(".") | map(tonumber? // 0)) < [6,3])
+                       | .tagName)' |
             while read -r old; do
               gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
             done

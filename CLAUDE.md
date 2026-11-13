@@ -39,17 +39,23 @@ plus native code (whisper.cpp in C/C++, Mozilla's translator in Rust). Public re
 
 ## Build and release (GitHub Actions)
 
-- `.github/workflows/main.yml` runs on every push (not `models-request`): builds the Rust translator
+- `.github/workflows/main.yml` runs on every push (not `models-request`/`stats-request`): builds the Rust translator
   with cargo-ndk (neon64 for arm64/armv7/x86_64 into `app/src/main/jniLibs`, plus
   `libcctranslate_i8mm.so`), then Gradle.
   - With secret `RELEASE_KEY_PASSWORD`: `assembleRelease` signed with `keystore/release.p12`
     (alias `clipcaptions`), published as `ClipCaptions-<ver>.apk`, marked latest.
   - Without it: debug build signed with `keystore/debug.keystore`, published as a pre-release
     `ClipCaptions-<ver>-test.apk`. Test and release builds can't install over each other.
-  - Keeps the 5 newest app releases; never touches the `models` release.
+  - Cleanup keeps the 5 newest test builds and **every proper release from 6.3 on** (their
+    download counts feed DOWNLOADS.md); deletes releases before 6.3 (test-key builds); never
+    touches the `models` release.
 - `.github/workflows/models.yml` (monthly, manual, or push to `models-request`) runs
   `.github/scripts/mirror_models.py`: copies Mozilla's Firefox Translations models (Android
   release builds, version 3) to the `models` release with `models.json`.
+- `.github/workflows/stats.yml` (Mondays, manual, or push to `stats-request`) runs
+  `.github/scripts/download_stats.py`: adds up APK downloads of proper releases (6.3 on, no test
+  builds or model files), keeps per-version counts in `stats/downloads.json`, writes
+  `DOWNLOADS.md`, commits to main with `[skip ci]`. Orion Store has no stats of its own.
 - Every release bumps `versionCode` and `versionName` in `ClipCaptions/app/build.gradle.kts`
   (the app shows the version on its main screen).
 - Put `[skip ci]` in commit messages that only touch docs, to save build minutes.

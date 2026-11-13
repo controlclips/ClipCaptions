@@ -1,0 +1,43 @@
+# Counts the app's downloads every Monday and updates DOWNLOADS.md (see
+# .github/scripts/download_stats.py). Can also be run by hand from the Actions tab, or by pushing
+# to the stats-request branch.
+name: Count downloads
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [stats-request]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-stats
+  cancel-in-progress: false
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Count and save
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/download_stats.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add DOWNLOADS.md stats/downloads.json
+          git diff --cached --quiet && exit 0
+          git commit -q -m "Download count for $(date -u +%Y-%m-%d) [skip ci]"
+          # Someone may have pushed meanwhile: put this on top and try again.
+          for attempt in 1 2 3; do
+            git push -q origin HEAD:main && exit 0
+            git pull -q --rebase origin main
+          done
+          exit 1
