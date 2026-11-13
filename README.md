@@ -6,6 +6,11 @@ Clip Captions shows what people say in videos as text, translated into your lang
 
 <p align="center"><img src="ClipCaptions/branding/clip-captions-banner-1024x500.png" alt="Clip Captions" width="600"></p>
 
+<p align="center">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1_main.jpg" alt="Main screen: choose how to listen and start captions" width="260">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2_languages.jpg" alt="Languages you watch, the language to translate into, caption size and My phrases" width="260">
+</p>
+
 ## Download
 
 - **[Latest version](https://github.com/controlclips/ClipCaptions/releases/latest):** tap the `.apk` file under **Assets**, then open it to install. Updates install over the previous version and keep your settings and languages.
