@@ -195,8 +195,10 @@ class CaptionService : Service() {
 
     // Auto mode
     private var lastLanguage = ""
-    // Any language mode: the pieces of the sentence being heard, translated again whole once it ends.
+    // Every mode: recent pieces of speech, translated again together for context.
     private val sentencePieces = SentenceJoiner()
+    private var joinToken = 0
+    private val joinTokens = HashMap<Int, Int>()
     private val translators = HashMap<String, CaptionTranslator>()
     // Languages whose translation is on the phone. Read by the Whisper thread too.
     private val readyLanguages: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
@@ -469,6 +471,8 @@ class CaptionService : Service() {
         // Time how long the new video's first words take to appear.
         speechStartedAt = 0L
         timeNextSpeech = true
+        sentencePieces.reset()
+        joinTokens.clear()
         if (googleMode) {
             liveGeneration++
             pendingLive = null
@@ -477,7 +481,6 @@ class CaptionService : Service() {
             forgetLiveTranslation()
         } else if (autoMode) {
             lastLanguage = ""
-            sentencePieces.reset()
             pendingChunks.clear()
             // Stop working on the old video's speech, so the new video's comes through sooner.
             if (WhisperLib.available) WhisperLib.nativeCancel()
@@ -794,7 +797,8 @@ class CaptionService : Service() {
             forgetLiveTranslation()
             // A burst of words at once (the recogniser catching up) is old news by the time it
             // arrives: show only the newest line rather than flood the box.
-            showLine(box, split.finished.last(), language)
+            val line = split.finished.last()
+            joinPiece(showLine(box, line, language), line, language, translatorFor(language))
         }
         showGoogleLive(box, split.live, language)
     }
@@ -844,7 +848,7 @@ class CaptionService : Service() {
             box.setLive("", false)
             return
         }
-        showLine(box, rest, language, exact, shown)
+        joinPiece(showLine(box, rest, language, exact, shown), rest, language, translatorFor(language))
     }
 
     /** Google began a new session. If the last one stopped mid-sentence, keep what was on screen. */
@@ -1149,16 +1153,28 @@ class CaptionService : Service() {
             if (result.translatedByWhisper) translatorFor(language)?.let { prepareTranslation(language, it) }
             return
         }
-        val id = showLine(box, text, language)
-        if (id == null) {
+        joinPiece(showLine(box, text, language), text, language, translatorFor(language))
+    }
+
+    /**
+     * Speech arrives in pieces split at each pause. Translated alone, a piece loses its context, so
+     * once it's on screen it's translated again together with the pieces just before it, and that
+     * replaces their separate lines (see [SentenceJoiner]). [id] is the piece's line, or null when it
+     * isn't being translated.
+     */
+    private fun joinPiece(id: Int?, text: String, language: String, tr: CaptionTranslator?) {
+        if (id == null || tr == null) {
             sentencePieces.reset()
             return
         }
-        // A sentence heard in pieces is translated again whole once it ends, replacing the halves.
-        val whole = sentencePieces.add(id, text, language, result.video, SystemClock.elapsedRealtime()) ?: return
-        val tr = translatorFor(language) ?: return
+        val videoNow = video.get()
+        val whole = sentencePieces.add(id, text, language, videoNow, SystemClock.elapsedRealtime()) ?: return
+        // Only the newest request for a group may change it (an older, shorter one can finish later).
+        val group = whole.lines.first()
+        val token = ++joinToken
+        joinTokens[group] = token
         tr.translate(whole.text).addOnSuccessListener { translated ->
-            if (result.video == video.get()) overlay?.mergeLines(whole.lines, whole.text, translated)
+            if (videoNow == video.get() && joinTokens[group] == token) overlay?.mergeLines(whole.lines, whole.text, translated)
         }
     }
 
@@ -1436,5 +1452,6 @@ class CaptionService : Service() {
         tr.translate(text)
             .addOnSuccessListener { translated -> overlay?.setTranslation(id, translated) }
             .addOnFailureListener { overlay?.setTranslation(id, text) }
+        joinPiece(id, text, sourceCode, tr)
     }
 }

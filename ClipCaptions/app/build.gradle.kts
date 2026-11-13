@@ -12,8 +12,8 @@ android {
         // Android 10 is the first version that lets an app capture other apps' sound.
         minSdk = 29
         targetSdk = 35
-        versionCode = 21
-        versionName = "6.5"
+        versionCode = 22
+        versionName = "6.6"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
