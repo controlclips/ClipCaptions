@@ -60,9 +60,9 @@ plus native code (whisper.cpp in C/C++, Mozilla's translator in Rust). Public re
   (the app shows the version on its main screen).
 - Put `[skip ci]` in commit messages that only touch docs, to save build minutes.
 - Helper branches (orphan, not app code): `apk-request` → workflow copies the newest APK to branch
-  `apk` (fetch an APK with plain git when the GitHub API isn't reachable); `translate-probe`
-  (+ `-out`) tried the translator with real models and checked the ARM kernels under QEMU;
-  `mirror-check` (+ `-out`) reports what's on the `models` release.
+  `apk` (fetch an APK with plain git when the GitHub API isn't reachable); `mirror-check` →
+  writes a report of the `models` release to `mirror-check-out`. (The translator probe that tested
+  quality and the ARM kernels under QEMU was removed; it's in this repo's history before 14 Nov 2026.)
 
 ## Checking changes
 
@@ -73,11 +73,24 @@ plus native code (whisper.cpp in C/C++, Mozilla's translator in Rust). Public re
 - Release-key cert sha256 (proper releases, from 6.6): `0c58ee0bf575605d6204b585452844fc957dbf19ca12518b4adb2d25cba68385`.
 - Test-key cert sha256 (test builds): `e0a5017631f2c6999f0c1dd25e4bf767cc72f02692963773eb66ab345f4a7db8`.
 
+## Commits: never the owner's personal details
+
+The repo is public. Commit as the GitHub account's private address, never a personal name or email:
+
+```
+git config user.name "controlclips"
+git config user.email "311474300+controlclips@users.noreply.github.com"
+```
+
+Set this before the first commit in every session (check with `git log -1 --format='%an <%ae>'`).
+The history was rewritten on 14 November 2026 to remove the owner's name and Gmail.
+
 ## Don't
 
 - Add paid services, analytics, ads or anything sending captions off the phone.
 - Download anything while captions are running (prepare everything on the main screen first).
 - Commit secrets, change or regenerate `release.p12`, or delete the `models` release.
+- Put the owner's real name, email, employer or location in commits, files, releases or issues.
 - Ship the stock fxtranslate aarch64 build alone (i8mm only: crashes phones without it).
 
 ## Open items (as of 6.6, 13 November 2026)
