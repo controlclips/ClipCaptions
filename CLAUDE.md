@@ -93,12 +93,13 @@ The history was rewritten on 14 November 2026 to remove the owner's name and Gma
 - Put the owner's real name, email, employer or location in commits, files, releases or issues.
 - Ship the stock fxtranslate aarch64 build alone (i8mm only: crashes phones without it).
 
-## Open items (as of 6.6, 13 November 2026)
+## Open items (as of 6.6, 14 November 2026)
 
-- Done: `RELEASE_KEY_PASSWORD` added, repo public, first signed release 6.6 (v6.6-build23),
-  screenshots 1_main.jpg and 2_languages.jpg in `fastlane/metadata/android/en-US/images/phoneScreenshots/`.
-- Orion Store submission not posted yet: an issue on RookieEnough/Orion-Data titled
-  "App Submission [1 App] - Clip Captions" with the JSON format Orion's app generates
-  (name, id, description, icon, repoUrl, githubRepo, releaseKeyword "apk", packageName,
-  category "Education", author, screenshots, platform). Owner may add a third screenshot
-  (captions over a video with no recognisable person).
+- Released: signed 6.6 (v6.6-build24). Submitted to Orion Store on 14 Nov 2026:
+  https://github.com/RookieEnough/Orion-Data/issues/2924 (awaiting review). When it's listed,
+  change README's "Coming soon to Orion Store" line.
+- History rewritten 14 Nov 2026 (owner's name and Gmail replaced by the noreply address); the 6.6
+  and `models` releases were remade on the new history, and old build runs deleted. The merged
+  PR #1 still holds a hidden copy of the old history (`refs/pull/1/head`); only GitHub Support
+  can purge it.
+- Optional: a third screenshot (captions over a video with no recognisable person).
