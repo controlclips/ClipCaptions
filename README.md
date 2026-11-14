@@ -91,8 +91,6 @@ The main screen calls the three ways to caption **Instant**, **Any language** an
 
 **Swiping to the next video clears the captions** and the new video's words show as soon as they're recognised (the old video's half-finished sentence is dropped, without hiding a new sentence; Whisper stops working on the old video straight away) (TikTok, Instagram Reels, YouTube Shorts and similar). The app notices when a different video starts playing, or a video starts straight after you touch the screen. Pausing a video doesn't clear them, so you can stop to read.
 
-**Swiping to the next video clears the captions** and the new video's words show as soon as they're recognised (the old video's half-finished sentence is dropped, without hiding a new sentence; Whisper stops working on the old video straight away). The app notices when a different video starts playing, or a video starts straight after you touch the screen. Pausing a video doesn't clear them, so you can stop to read.
-
 ## Problems and ideas
 
 Use **Report a problem** in the app, or [open an issue](https://github.com/controlclips/ClipCaptions/issues). Please describe what you were watching and what happened.
