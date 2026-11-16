@@ -7,12 +7,17 @@
   {
    "date": "2026-11-14",
    "total": 3
+  },
+  {
+   "date": "2026-11-16",
+   "total": 9
   }
  ],
  "versions": {
   "6.6": {
    "builds": {
-    "v6.6-build23": 3
+    "v6.6-build23": 3,
+    "v6.6-build24": 6
    },
    "published": "2026-11-13"
   }
