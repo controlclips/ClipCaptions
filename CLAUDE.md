@@ -95,11 +95,13 @@ The history was rewritten on 14 November 2026 to remove the owner's name and Gma
 
 ## Open items (as of 6.6, 14 November 2026)
 
-- Released: signed 6.6 (v6.6-build24). Submitted to Orion Store on 14 Nov 2026:
-  https://github.com/RookieEnough/Orion-Data/issues/2924 (awaiting review). When it's listed,
-  change README's "Coming soon to Orion Store" line.
+- Released: signed 6.6 (v6.6-build24). First Orion Store request (issue #2924 on
+  RookieEnough/Orion-Data, written by hand) was rejected as "malformed": requests must come from
+  the Orion Store app's Submit app form, which needs 3+ screenshots (taken from
+  `fastlane/.../phoneScreenshots`). Third screenshot (`3_phrases.jpg`) added 16 Nov 2026 so the
+  owner can resubmit from the app. When it's listed, change README's "Coming soon to Orion Store" line.
 - History rewritten 14 Nov 2026 (owner's name and Gmail replaced by the noreply address); the 6.6
   and `models` releases were remade on the new history, and old build runs deleted. The merged
   PR #1 still holds a hidden copy of the old history (`refs/pull/1/head`); only GitHub Support
   can purge it.
-- Optional: a third screenshot (captions over a video with no recognisable person).
+- Optional: a screenshot of captions over a video with no recognisable person.
