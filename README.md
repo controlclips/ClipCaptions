@@ -9,6 +9,7 @@ Clip Captions shows what people say in videos as text, translated into your lang
 <p align="center">
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1_main.jpg" alt="Main screen: choose how to listen and start captions" width="260">
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2_languages.jpg" alt="Languages you watch, the language to translate into, caption size and My phrases" width="260">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3_phrases.jpg" alt="My phrases: words saved with the star on the caption box" width="260">
 </p>
 
 ## Download
